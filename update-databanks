@@ -1,0 +1,505 @@
+#!/usr/bin/make -f
+#
+# revised update script using the perl flatten-and-cleanup script for rsync
+
+STARTPATH	:= $(shell pwd)
+
+include gmsl
+
+# pdbdiv is used for determining divided paths, example: '1crn' => 'cr'
+pdbdiv=$(call substr,$1,2,3)
+
+# first target, will be used by gmake when no other target is provided
+firstTarget: all
+
+# Where we locate everything:
+DATADIR		= /data/
+BINDIR		= /data/bin/
+FASTADIR	= $(DATADIR)fasta/
+STATSDIR	= $(DATADIR)status/
+FLAGSDIR	= $(DATADIR)flags/
+WHYNOTDIR	= $(DATADIR)scratch/whynot2/
+
+PATHS		= $(STATSDIR) $(FLAGSDIR) $(FASTADIR)
+PATHS		+= $(DATABANK:%=$(DATADIR)/%)
+
+# some executables we use
+RUN_MAKE		?= /usr/local/bin/mrs-run-and-log
+PDBREDOSCRIPT	?= /data/zata/pdb_redo.csh
+MKDSSP			?= /usr/local/bin/mkdssp
+MKHSSP			?= /usr/local/bin/mkhssp
+CVHSSP			?= /usr/local/bin/hsspconv
+PERL			?= /usr/bin/perl
+
+# A generic rule to fetch the PDBIDS
+PDBIDS		= $(notdir $(wildcard $(DATADIR)pdb/all/pdb*.ent.gz))
+PDBIDS		:= $(PDBIDS:pdb%.ent.gz=%)
+
+# A generic rule to fetch the MMCIFIDS
+MMCIFIDS	= $(notdir $(wildcard $(DATADIR)mmCIF/*.cif.gz))
+MMCIFIDS	:= $(MMCIFIDS:%.cif.gz=%)
+
+pickstructfile = $(shell if [ -f /data/pdb/all/pdb$(1).ent.gz ] ; then echo /data/pdb/all/pdb$(1).ent.gz; else echo /data/mmCIF/$(1).cif.gz; fi  )
+
+# some default options
+RSYNC_OPTIONS.$(DATABANK)	= -rtv --delete
+RSYNC_DEST.$(DATABANK)		= $(DATADIR)$(DATABANK)/
+WGET_DEST.$(DATABANK)		= $(DATADIR)$(DATABANK)/
+WGET_OPTIONS.$(DATABANK)	= -N -r -nd
+WHY_NOT_DIR.$(DATABANK)		= $(DATADIR)$(DATABANK)/
+OBSOLETEDIR.$(DATABANK)		= $(DATADIR)$(DATABANK)/obsolete/
+
+# The databanks 
+DATABANKS						+= enzyme
+RSYNC_URL.enzyme				= rsync://ftp.ebi.ac.uk/pub/databases/enzyme/release_with_updates/
+
+DATABANKS					   += nmr_restraints
+RSYNC_URL.nmr_restraints		= rsync.wwpdb.org::ftp_data/structures/divided/nmr_restraints/**/
+RSYNC_OPTIONS.nmr_restraints	= -rtv --delete --port=33444 --include='????.mr.gz' --exclude='*'
+RSYNC_DEST.nmr_restraints	   = $(DATADIR)nmr_restraints/
+DELETE.nmr_restraints			= $(FRAUDULENTIDS:%=$(DATADIR)nmr_restraints/%.mr.gz)
+WHY_NOT_DB.nmr_restraints	   = NMR
+WHY_NOT_DIR.nmr_restraints	  = $(DATADIR)nmr_restraints/
+
+DATABANKS						+= pdb
+RSYNC_URL.pdb					= rsync.wwpdb.org::ftp_data/structures/divided/pdb/**/
+RSYNC_OPTIONS.pdb				= -rtv --delete --port=33444 --include='pdb????.ent.gz' --exclude='*'
+RSYNC_DEST.pdb					= $(DATADIR)pdb/all/
+#FLATTEN.pdb						= pdb
+DATFILES.pdb					= $(PDBIDS:%=$(DATADIR)pdb/flat/pdb%.ent)
+#DATFILES.pdb				   = $(foreach ID,$(PDBIDS), $(DATADIR)pdb/text/divided/$(call pdbdiv,$(ID))/pdb$(ID).ent)
+DELETE.pdb						= $(FRAUDULENTIDS:%=$(DATADIR)pdb/all/pdb%.ent.gz) $(FRAUDULENTIDS:%=$(DATADIR)pdb/flat/pdb%.ent)
+OBSOLETE.pdb					 = $(filter-out $(DATFILES.pdb), $(wildcard $(DATADIR)pdb/flat/*))
+WHY_NOT_DB.pdb					= PDB
+WHY_NOT_DIR.pdb					:= $(DATADIR)pdb/flat/
+#WHY_NOT_DIR.pdb					:= $(DATADIR)pdb/text/divided/
+MAKE_DATA_FLAGS.pdb				= -j32
+
+
+RUNAFTER.pdb					= $(BINDIR)adjustSkipList.bash $(BINDIR)pdbredo_skip.txt
+
+$(DATADIR)pdb/flat/pdb%.ent: $(DATADIR)pdb/all/pdb%.ent.gz
+	zcat -c $< > $@
+	touch -r $< $@
+
+FRAUDULENTIDS = $(shell cat $(DATADIR)bin/pdb_fraud)
+RSYNC_EXCLUDES = $(FRAUDULENTIDS:%=--exclude='*%*')
+
+# pdbechem's rsync is bugged, use wget until it's fixed!
+DATABANKS						+= pdbechem
+#RSYNC_URL.pdbechem				= ftp.ebi.ac.uk::pub/databases/msd/pdbechem/
+WGET_OPTIONS.pdbechem			= -Nr --no-host-directories --cut-dirs=4
+WGET_SOURCE.pdbechem			= ftp://ftp.ebi.ac.uk/pub/databases/msd/pdbechem/*
+
+DATABANKS			+= structure_factors
+RSYNC_URL.structure_factors	 = rsync.wwpdb.org::ftp_data/structures/divided/structure_factors/**/
+RSYNC_OPTIONS.structure_factors = -rtv --delete --port=33444 --include='r????sf.ent.gz' --exclude='*'
+RSYNC_DEST.structure_factors	= $(DATADIR)structure_factors/
+WHY_NOT_DB.structure_factors	= STRUCTUREFACTORS
+WHY_NOT_DIR.structure_factors	:= $(DATADIR)structure_factors/
+DELETE.structure_factors	= $(FRAUDULENTIDS:%=$(DATADIR)structure_factors/r%sf.ent.gz)
+
+SF_FILES	= $(wildcard $(DATADIR)structure_factors/r????sf.ent.gz)
+SF_IDS		= $(SF_FILES:$(DATADIR)structure_factors/r%sf.ent.gz=%)
+
+DATABANKS						+= mmCIF
+RSYNC_URL.mmCIF				   = rsync.wwpdb.org::ftp_data/structures/divided/mmCIF/**/
+RSYNC_OPTIONS.mmCIF			   = -rtv --delete --port=33444 --include='????.cif.gz' --exclude='*'
+RSYNC_DEST.mmCIF				  = $(DATADIR)mmCIF/
+WHY_NOT_DB.mmCIF		  		  = MMCIF
+DELETE.mmCIF					  = $(FRAUDULENTIDS:%=$(DATADIR)mmCIF/%.cif.gz)
+
+DATABANKS						+= dssp
+DSSPIDS							= $(MMCIFIDS)
+DSSPIDSVALID						= $(filter-out $(shell /bin/cat dssp_skip.txt), $(DSSPIDS))
+DATFILES.dssp						= $(DSSPIDSVALID:%=$(DATADIR)dssp/%.dssp)
+DELETE.dssp					 	= $(filter-out $(DSSPIDS:%=$(DATADIR)dssp/%.dssp), $(wildcard $(DATADIR)dssp/*.dssp))
+
+WHY_NOT_DB.dssp					= DSSP
+MAKE_DATA_FLAGS.dssp			= -j32 -k
+
+# pdb has priority over mmcif
+$(DATADIR)dssp/%.dssp: $(DATADIR)pdb/all/pdb%.ent.gz
+	$(MKDSSP) $< $@ || ( echo $* >> dssp_skip.txt; rm -f $@ )
+	rm -f $(DATADIR)pdbfinder/data/$*.dat
+
+$(DATADIR)dssp/%.dssp: $(DATADIR)mmCIF/%.cif.gz
+	$(MKDSSP) $< $@ || ( echo $* >> dssp_skip.txt; rm -f $@ )
+	rm -f $(DATADIR)pdbfinder/data/$*.dat
+
+dssp: pdb
+
+
+DATABANKS					   += bdb
+DATFILES.bdb					= $(foreach id,$(PDBIDS),$(DATADIR)bdb/$(call pdbdiv,$(id))/$(id)/$(id).bdb)
+MAKE_DATA_FLAGS.bdb				= -j32 -k
+WHY_NOT_DB.bdb					= BDB
+# When the bdb file is obsolete, the entire directory will be deleted:
+DELETE.bdb					  = $(filter-out $(dir $(DATFILES.bdb)), $(wildcard $(DATADIR)bdb/*/*/))
+
+
+ifeq ($(DATABANK),bdb)
+include bdb.depends
+endif
+
+bdb.depends:
+	find $(DATADIR)pdb/flat/ -name "pdb*.ent" | \
+		sed -e 's|$(DATADIR)pdb/flat/pdb\(.\)\(..\)\(.\)\.ent|$(DATADIR)bdb/\2/\1\2\3/\1\2\3.bdb: \0\n|' \
+		> bdb.depends
+
+# During execution, the bdb script might generate a whynot file. If it's newly created, this whynot file must be annotated.
+# Old whynot files must be unannotated if they are not the same.
+# The BDBUpdate bash script handles all this for a given pdb id.
+$(DATADIR)bdb/%.bdb: /usr/local/bin/mkbdb
+	/data/bin/BDBUpdate.bash `basename $(@D)`
+
+
+DATABANKS					+= hssp3
+HSSP3IDS					= $(filter-out $(shell cat hssp3-skip.txt), $(MMCIFIDS))
+HSSP3FILES					= $(HSSP3IDS:%=$(DATADIR)hssp3/%.hssp.bz2)
+DATFILES.hssp3					= $(HSSP3IDS:%=$(DATADIR)hssp3/%.hssp.bz2)
+DELETE.hssp3					+= $(filter-out $(MMCIFIDS:%=$(DATADIR)hssp3/%.hssp.bz2), $(wildcard $(DATADIR)hssp3/*))
+SORTED_HSSP3					= $(shell ls -rt $(DATADIR)hssp3/)
+DATFILES.hssp3					+= $(OUTDATED_HSSP3)
+MAKE_DATA_FLAGS.hssp3			= -j32 -k
+
+hssp3: pdb uniprot
+
+$(OUTDATED_HSSP3): /data/fasta/uniprot_sprot.fasta
+
+# UPDATEHSSP can be set on command line, in combination with a single requested file
+ifeq ($(UPDATEHSSP),true)
+$(HSSP3FILES): /data/fasta/uniprot_sprot.fasta
+endif
+
+# pdb has priority over mmcif
+$(DATADIR)hssp3/%.hssp.bz2: /data/pdb/all/pdb%.ent.gz
+	( $(MKHSSP) -o $@ -a 1 -m 2500 --fetch-dbrefs $< -d /data/fasta/uniprot_sprot.fasta -d /data/fasta/uniprot_trembl.fasta \
+		2> /data/scratch/whynot2/hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
+
+$(DATADIR)hssp3/%.hssp.bz2: /data/mmCIF/%.cif.gz
+	( $(MKHSSP) -o $@ -a 1 -m 2500 --fetch-dbrefs $< -d /data/fasta/uniprot_sprot.fasta -d /data/fasta/uniprot_trembl.fasta \
+				2> /data/scratch/whynot2/hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
+
+DATABANKS						+= hssp
+PRESENTHSSP3FILES					= $(wildcard $(DATADIR)hssp3/*.hssp.bz2)
+HSSPIDS							= $(PRESENTHSSP3FILES:$(DATADIR)hssp3/%.hssp.bz2=%)
+#HSSPIDS							= $(filter-out $(shell cat hssp1-fail.txt), $(HSSP3IDS))
+DATFILES.hssp					= $(HSSPIDS:%=$(DATADIR)hssp/%.hssp.bz2)
+DELETE.hssp						= $(filter-out $(HSSPIDS:%=$(DATADIR)hssp/%.hssp.bz2), $(wildcard $(DATADIR)hssp/*))
+WHY_NOT_DB.hssp					= HSSP
+MAKE_DATA_FLAGS.hssp			= -j32 -k
+
+hssp: hssp3
+
+$(DATADIR)hssp/%.hssp.bz2: $(DATADIR)hssp3/%.hssp.bz2
+	$(CVHSSP) $< $@ || (echo $* >> hssp1-fail.txt ; rm -f $@)
+	rm -f $(DATADIR)pdbfinder/data/$*.dat
+
+DATABANKS						+= pdbfinder
+PDBFINDERIDS					= $(PDBIDS)
+DATFILES.pdbfinder				= $(DATADIR)pdbfinder/PDBFIND.TXT
+DATFILES2.pdbfinder				= $(PDBFINDERIDS:%=$(DATADIR)pdbfinder/data/%.dat)
+DELETE.pdbfinder				= $(filter-out $(DATFILES2.pdbfinder), $(wildcard $(DATADIR)pdbfinder/data/*.dat))
+WHY_NOT_DIR.pdbfinder			= $(DATADIR)$(DATABANK)/PDBFIND.TXT
+WHY_NOT_DB.pdbfinder			= PDBFINDER
+PATHS							+= $(DATADIR)/pdbfinder/data/
+MAKE_DATA_FLAGS.pdbfinder		+= -j32
+
+pdbfinder: structure_factors hssp dssp 
+
+$(DATADIR)pdbfinder/data/%.dat: $(DATADIR)mmCIF/%.cif.gz
+	echo $(@F:%.dat=%) | /data/prog/pdbfinder/mkpdbfinder -H > $@ 
+
+$(DATADIR)pdbfinder/PDBFIND.TXT: $(DATFILES2.pdbfinder)
+	if [ "x$(DELETE.pdbfinder)" != "x" ] ; then rm -f $(DELETE.pdbfinder); fi
+	/data/prog/pdbfinder/mkpdbfinder -A $(DATADIR)pdbfinder/data/ > $@
+	gzip -c $@ > $@.gz
+
+DATABANKS						+= pdbfinder2
+DATFILES.pdbfinder2				= $(DATADIR)pdbfinder2/PDBFIND2.TXT
+PDBFINDER2IDS					= $(filter-out $(shell cat $(STATSDIR)pdbfinder2_skip.txt), $(PDBFINDERIDS))
+DATFILES2.pdbfinder2			= $(PDBFINDER2IDS:%=$(DATADIR)pdbfinder2/data/%.dat)
+DELETE.pdbfinder2				= $(filter-out $(PDBFINDERIDS:%=$(DATADIR)pdbfinder2/data/%.dat), $(wildcard $(DATADIR)pdbfinder2/data/*.dat))
+WHY_NOT_DIR.pdbfinder2			= $(DATADIR)$(DATABANK)/PDBFIND2.TXT
+WHY_NOT_DB.pdbfinder2			= PDBFINDER2
+PATHS							+= $(DATADIR)/pdbfinder2/data/
+MAKE_DATA_FLAGS.pdbfinder2		+= -j32
+
+pdbfinder2: pdbfinder pdbreport
+
+$(DATADIR)pdbfinder2/data/%.dat: $(DATADIR)pdbfinder/data/%.dat 
+	/data/prog/pdbfinder2/what_modelbase.py -pdbftopdbf2 $(@F:%.dat=%) || ( echo $(@F:%.dat=%) >> $(STATSDIR)pdbfinder2_skip.txt )
+
+$(DATADIR)pdbfinder2/PDBFIND2.TXT: $(DATFILES2.pdbfinder2)
+	if [ "x$(DELETE.pdbfinder2)" != "x" ] ; then rm -f $(DELETE.pdbfinder2); fi
+	/data/prog/pdbfinder2/mergepdbfinder2.pl $@ $(DATADIR)pdbfinder2/data/
+	gzip -c $@ > $@.gz
+
+DATABANKS						+= pdbreport
+PDBREPORTIDS					= $(filter-out $(shell cat pdbreport_skip.txt), $(PDBIDS))
+DATFILES.pdbreport			  = $(foreach id,$(PDBREPORTIDS),$(DATADIR)pdbreport/$(call pdbdiv,$(id))/$(id)/index.html)
+OBSOLETE.pdbreport				= $(filter-out $(foreach id, $(PDBIDS),$(DATADIR)pdbreport/$(call pdbdiv,$(id))/$(id)), $(wildcard $(DATADIR)pdbreport/??/????))
+WHY_NOT_DB.pdbreport			= PDBREPORT
+MAKE_DATA_FLAGS.pdbreport		+= -j32
+OBSOLETEDIR.pdbreport			= $(DATADIR)pdbreport/obsolete/
+
+ifeq ($(DATABANK),pdbreport)
+include pdbreport.depends
+endif
+
+pdbreport.depends:
+	 find $(DATADIR)pdb/all/ -name "pdb*.ent.gz" | \
+		sed -e 's|$(DATADIR)pdb/all/pdb\(.\)\(..\)\(.\)\.ent\.gz|$(DATADIR)pdbreport/\2/\1\2\3/index.html: \0\n|' \
+		> pdbreport.depends
+
+$(DATADIR)pdbreport/%/index.html:
+	id=$(notdir $(@D)); $(BINDIR)wc.csh $$id || (echo $$id >> pdbreport_skip.txt)
+
+SF_FILES						= $(wildcard $(DATADIR)structure_factors/r*sf.ent.gz)
+SF_IDS							= $(SF_FILES:$(DATADIR)structure_factors/r%sf.ent.gz=%)
+
+pdb_redo: structure_factors
+
+PDBREDOSKIP					= $(BINDIR)pdbredo_skip.txt
+DATABANKS					+= pdb_redo
+# Only build the pdb_redo files that have never been created yet
+PDB_REDO_IDS					= $(shell snarf http://www.cmbi.ru.nl/WHY_NOT2/resources/list/PDB_REDO_UNANNOTATED -)
+PDB_REDO_IDS					:= $(filter-out $(shell cat $(PDBREDOSKIP)), $(PDB_REDO_IDS))
+DATFILES.pdb_redo				= $(PDB_REDO_IDS:%=$(DATADIR)pdb_redo/flags/%)
+WHY_NOT_DB.pdb_redo				= PDB_REDO
+MAKE_DATA_FLAGS.pdb_redo		= -j32
+PDB_REDO_FLAG_DELETE			= $(filter-out $(SF_IDS:%=$(DATADIR)pdb_redo/flags/%), $(wildcard $(DATADIR)pdb_redo/flags/????))
+PDB_REDO_DIR_DELETE				= $(filter-out $(foreach id, $(SF_IDS), $(DATADIR)pdb_redo/$(call pdbdiv,$(id))/$(id)/), $(dir $(wildcard $(DATADIR)pdb_redo/*/*/*_final.pdb)))
+PDB_REDO.DELETE				 = $(PDB_REDO_FLAG_DELETE) $(PDB_REDO_DIR_DELETE)
+
+#VPATH.pdb_redo					= $(DATADIR)structure_factors
+
+$(DATADIR)pdb_redo/flags/%: $(DATADIR)structure_factors/r%sf.ent.gz
+	perl flag_file_is_older_than_x_days.pl start_data_flag 4
+	/usr/bin/timeout 4d /bin/bash -c '$(PDBREDOSCRIPT) $* && touch $@ || echo $* >> $(PDBREDOSKIP)' || \
+		(/bin/echo -e "COMMENT: PDB REDO script timed out\nPDB_REDO, $*" >> /data/zata/whynot.txt; echo $* >> $(PDBREDOSKIP))
+	p=`find $(DATADIR)pdb_redo/ -name $*_final_tot.pdb | head -n1`; \
+		if [ $$p ] ; then ln -s $$p $(DATADIR)pdb_redo/flat/$* ; fi
+
+PRESENT_PDB_REDO_FILES			= $(wildcard $(DATADIR)pdb_redo/*/*/*_final.pdb)
+PRESENT_PDB_REDO_IDS			= $(notdir $(PRESENT_PDB_REDO_FILES:%_final.pdb=%))
+
+DATABANKS			+= dssp_redo
+DSSP_REDO_IDS			:= $(PRESENT_PDB_REDO_IDS)
+DATFILES.dssp_redo		= $(DSSP_REDO_IDS:%=$(DATADIR)dssp_redo/%.dssp)
+DELETE.dssp_redo				= $(filter-out $(DATFILES.dssp_redo), $(wildcard $(DATADIR)dssp_redo/*.dssp))
+WHY_NOT_DB.dssp_redo		= DSSP_REDO
+WHY_NOT_DIR.dssp_redo		= $(DATADIR)dssp_redo
+
+ifeq ($(DATABANK),dssp_redo)
+include dssp_redo.depends
+endif
+
+dssp_redo.depends:
+	find $(DATADIR)pdb_redo/??/????/ -name "????_final.pdb" | \
+		sed -e 's|$(DATADIR)pdb_redo/\(..\)/\(....\)/\(....\)_final\.pdb|$(DATADIR)dssp_redo/\3.dssp: \0\n|' \
+		> dssp_redo.depends
+
+$(DATADIR)dssp_redo/%.dssp:
+	$(MKDSSP) $(DATADIR)pdb_redo/$(call pdbdiv,$*)/$*/$*_final.pdb $(DATADIR)dssp_redo/$*.dssp || grep -q $* dssp_redo_skip.txt || ( echo $* >> dssp_redo_skip.txt; rm -f $@ )
+
+MAKE_DATA_FLAGS.dssp_redo					= -j32
+
+dssp_redo: pdb_redo
+
+DATABANKS						+= XML-noatom
+RSYNC_URL.XML-noatom			= rsync.wwpdb.org::ftp_data/structures/divided/XML-noatom/**/
+RSYNC_OPTIONS.XML-noatom		= -rtv --delete --port=33444 --include='????-noatom.xml.gz' --exclude='*'
+RSYNC_DEST.XML-noatom		   = $(DATADIR)XML-noatom/
+DELETE.XML-noatom				= $(FRAUDULENIDS:%=$(DATADIR)XML-noatom/%-noatom.xml.gz)
+
+DATABANKS						+= uniprot
+RSYNC_URL.uniprot				= rsync://ftp.ebi.ac.uk/pub/databases/swissprot/release/
+RSYNC_OPTIONS.uniprot			+= --include='uniprot_*.fasta.gz' --include='README' --include='reldate*' --exclude='*'
+DATFILES.uniprot				= $(FASTADIR)uniprot_sprot.fasta $(FASTADIR)uniprot_trembl.fasta
+
+ifneq (,$(findstring wi_list_,$(DATABANK)))
+INPUTTYPE				= $(word 3,$(subst _, ,$(DATABANK)))
+LIS			 			= $(lastword $(subst _, ,$(DATABANK)))
+include $(DATABANK).depends
+endif
+
+ifneq (,$(findstring wi_scenes_,$(DATABANK)))
+INPUTTYPE							   = $(word 3,$(subst _, ,$(DATABANK)))
+LIS									 = $(lastword $(subst _, ,$(DATABANK)))
+include $(DATABANK).depends
+endif
+
+LISTYPES = acc cal cc1 cc2 cc3 chi dsp iod sbh sbr ss1 ss2 tau wat
+LISTYPES_SCENES = ss2 iod
+
+include lis.dataflags
+
+lis.dataflags:
+	(for lis in $(LISTYPES) ; do \
+		echo MAKE_DATA_FLAGS.wi_list_pdb_$$lis = -j32; echo MAKE_DATA_FLAGS.wi_list_redo_$$lis = -j32; \
+	done ; \
+	for lis in $(LISTYPES_SCENES) ; do \
+		echo MAKE_DATA_FLAGS.wi_scenes_pdb_$$lis = -j32; echo MAKE_DATA_FLAGS.wi_scenes_redo_$$lis = -j32; \
+	done) > lis.dataflags
+
+include lis.whynots
+
+lis.whynots:
+	(for lis in $(LISTYPES) ; do \
+				echo WHY_NOT_DB.wi_list_pdb_$$lis = WHATIF_PDB_$$lis; echo WHY_NOT_DB.wi_list_redo_$$lis =  WHATIF_REDO_$$lis; \
+		echo WHY_NOT_DIR.wi_list_pdb_$$lis = $(DATADIR)wi-lists/pdb/$$lis/; echo WHY_NOT_DIR.wi_list_redo_$$lis = $(DATADIR)wi-lists/redo/$$lis/; \
+	done ; \
+	for lis in $(LISTYPES_SCENES) ; do \
+		echo WHY_NOT_DB.wi_scenes_pdb_$$lis = PDB_SCENES_$$lis; echo WHY_NOT_DB.wi_scenes_redo_$$lis = REDO_SCENES_$$lis; \
+		echo WHY_NOT_DIR.wi_scenes_pdb_$$lis = $(DATADIR)wi-lists/pdb/scenes/$$lis/; echo WHY_NOT_DIR.wi_scenes_redo_$$lis = $(DATADIR)wi-lists/redo/scenes/$$lis/; \
+	done) > lis.whynots
+
+DATABANKS += $(foreach lis, $(LISTYPES), wi_list_pdb_$(lis) wi_list_redo_$(lis))
+
+WHYNOTFILES.wi_list_$(INPUTTYPE)_$(LIS) = $(wildcard $(DATADIR)wi-lists/$(INPUTTYPE)/$(LIS)/*/*.whynot)
+UNAVAILABLE.wi_list_$(INPUTTYPE)_$(LIS) = $(WHYNOTFILES.wi_list_$(INPUTTYPE)_$(LIS):%.whynot=%.bz2)
+
+DATFILES.wi_list_pdb_$(LIS)	 = $(foreach id, $(PDBIDS), $(DATADIR)wi-lists/pdb/$(LIS)/$(id)/$(id).$(LIS).bz2)
+DATFILES.wi_list_redo_$(LIS)	= $(foreach id, $(PRESENT_PDB_REDO_IDS), $(DATADIR)wi-lists/redo/$(LIS)/$(id)/$(id).$(LIS).bz2)
+
+DELETE.wi_list_pdb_$(LIS)	= $(filter-out $(DATFILES.wi_list_pdb_$(LIS)), $(wildcard  $(DATADIR)wi-lists/pdb/$(LIS)/*/*.$(LIS).bz2))
+DELETE.wi_list_redo_$(LIS)	= $(filter-out $(DATFILES.wi_list_redo_$(LIS)), $(wildcard $(DATADIR)wi-lists/redo/$(LIS)/*/*.$(LIS).bz2))
+DELETE.wi_scenes_pdb_$(LIS)	= $(filter-out $(DATFILES.wi_scenes_pdb_$(LIS)), $(wildcard  $(DATADIR)wi-lists/pdb/scenes/$(LIS)/*/*.sce))
+DELETE.wi_scenes_redo_$(LIS)	= $(filter-out $(DATFILES.wi_scenes_redo_$(LIS)),$(wildcard $(DATADIR)wi-lists/redo/scenes/$(LIS)/*/*.sce))
+
+# This should speed up the update, it skips the entries that have whynot files.
+# Remove the whynot files to rerun ..
+DATFILES.wi_list_$(INPUTTYPE)_$(LIS) := $(filter-out $(UNAVAILABLE.wi_list_$(INPUTTYPE)_$(LIS)), $(DATFILES.wi_list_$(INPUTTYPE)_$(LIS)))
+DELETE.wi_list_$(INPUTTYPE)_$(LIS)   := $(filter-out $(UNAVAILABLE.wi_list_$(INPUTTYPE)_$(LIS)), $(DELETE.wi_list_$(INPUTTYPE)_$(LIS)))
+
+# scenes specific settings:
+TITLE.ss2 = sym-contacts
+TITLE.iod = ion-sites
+
+WI_$(INPUTTYPE)_$(LIS)_PRESENT		  = $(wildcard $(DATADIR)wi-lists/$(INPUTTYPE)/$(LIS)/*/*.$(LIS).bz2)
+WI_$(INPUTTYPE)_$(LIS)_IDS			  = $(notdir $(WI_$(INPUTTYPE)_$(LIS)_PRESENT:%.$(LIS).bz2=%))
+DATFILES.wi_scenes_$(INPUTTYPE)_$(LIS)  = $(foreach id,$(WI_$(INPUTTYPE)_$(LIS)_IDS),$(DATADIR)wi-lists/$(INPUTTYPE)/scenes/$(LIS)/$(id)/$(id)_$(TITLE.$(LIS)).sce)
+
+DATABANKS += $(foreach lis, $(LISTYPES_SCENES), wi_scenes_pdb_$(lis) wi_scenes_redo_$(lis))
+
+wi_list_pdb_$(LIS).depends:
+	find $(DATADIR)pdb/all/ -name "pdb????.ent.gz" | \
+		sed -e 's|$(DATADIR)pdb/all/pdb\(....\)\.ent\.gz|$(DATADIR)wi-lists/redo/$(LIS)/\1.$(LIS): \0\n|' \
+		> wi_list_pdb_$(LIS).depends
+
+wi_list_redo_$(LIS).depends:
+	find $(DATADIR)pdb_redo/??/????/ -name "????_final.pdb" | \
+		sed -e 's|$(DATADIR)pdb_redo/\(..\)/\(....\)/\(....\)_final\.pdb|$(DATADIR)wi-lists/redo/$(LIS)/\3.$(LIS): \0\n|' \
+		> wi_list_redo_$(LIS).depends
+
+wi_scenes_$(INPUTTYPE)_$(LIS).depends:
+	find $(DATADIR)wi-lists/$(INPUTTYPE)/$(LIS)/ -name "*.$(LIS).bz2" | \
+		sed -e 's|$(DATADIR)wi-lists/\(.\+\)/\(...\)/\(....\)/\(....\)\.$(LIS)\.bz2|$(DATADIR)wi-lists/\1/scenes/\2/\3/\4_$(TITLE.$(LIS)).sce: \0\n|' \
+		> wi_scenes_$(INPUTTYPE)_$(LIS).depends
+
+$(DATADIR)wi-lists/%.bz2:
+	$(BINDIR)whatif-list.bash $(wordlist 1,3,$(subst /, ,$*)) || echo failed: $@
+
+$(DATADIR)wi-lists/$(INPUTTYPE)/scenes/$(LIS)/%.sce:
+	$(BINDIR)scene.bash $(INPUTTYPE) $(LIS) $(firstword $(subst /, ,$*)) || echo failed: $@
+
+$(FASTADIR)%.fasta: $(DATADIR)uniprot/%.fasta.gz
+	zcat -c $< > $@.tmp && mv -f $@.tmp $@
+
+# The generic rules
+
+vpath $(VPATH.$(DATABANK))
+
+$(FLAGSDIR)$(DATABANK).fetch_done:
+	if [ "x$(RSYNC_URL.$(DATABANK))" != "x" ] ; then /usr/bin/rsync $(RSYNC_EXCLUDES) $(RSYNC_OPTIONS.$(DATABANK)) $(RSYNC_URL.$(DATABANK)) $(RSYNC_DEST.$(DATABANK)); \
+	elif [ "x$(WGET_SOURCE.$(DATABANK))" != "x" ] ; then /usr/bin/wget $(WGET_OPTIONS.$(DATABANK)) $(WGET_SOURCE.$(DATABANK)) -P $(WGET_DEST.$(DATABANK)); \
+	fi
+	touch $@
+
+fetch: $(FLAGSDIR)$(DATABANK).fetch_done
+
+# obsolete files must be copied with cp, because mv can throw errors if the file already exists
+$(FLAGSDIR)$(DATABANK).data_done: $(DATFILES.$(DATABANK))
+	if [ "x$(DELETE.$(DATABANK))" != "x" ] ; then rm -rf $(DELETE.$(DATABANK)); fi
+	if [ "x$(OBSOLETE.$(DATABANK))" != "x" ] ; then cp -rf $(OBSOLETE.$(DATABANK)) $(OBSOLETEDIR.$(DATABANK)); rm -rf $(OBSOLETE.$(DATABANK)); fi
+	$(RUNAFTER.$(DATABANK))
+	touch $@
+
+data: $(FLAGSDIR)$(DATABANK).data_done
+
+$(FLAGSDIR)$(DATABANK).crawl_done: FORCE
+	if [ "$(WHY_NOT_DIR.$(DATABANK))x$(WHY_NOT_DB.$(DATABANK))" != "x" ] ; then \
+		$(WHYNOTDIR)crawl.py $(WHY_NOT_DB.$(DATABANK)) $(WHY_NOT_DIR.$(DATABANK)); \
+	fi
+	touch $@
+
+crawl: $(FLAGSDIR)$(DATABANK).crawl_done
+
+dirs: $(PATHS)
+
+$(PATHS):
+	mkdir -p $@
+
+$(DATABANKS): dirs
+	touch start_data_flag
+	perl -i -nle 'print unless m/$@/' $(STATSDIR)failed_dbs.txt
+	+ if [ "$(RSYNC_URL.$@)x$(WGET_SOURCE.$@)" != "x" ] ; then $(RUN_MAKE) -r 5 -l $(STATSDIR)$@.fetch_log $(MAKE) -rf $(BINDIR)update-databanks DATABANK=$@ fetch || (echo $@ >> $(STATSDIR)failed_dbs.txt ; /bin/false ) ; fi
+	touch $(STATSDIR)$@.fetch_done
+	+ $(RUN_MAKE) -r 5 -l $(STATSDIR)$@.data_log $(MAKE) -rf $(BINDIR)update-databanks $(MAKE_DATA_FLAGS.$@) DATABANK=$@ data || (echo $@ >> $(STATSDIR)failed_dbs.txt ; /bin/false )
+	touch $(STATSDIR)$@.data_done
+	+ if [ "$(WHY_NOT_DB.$@)x" != "x" ] ; then $(RUN_MAKE) -r 5 -l $(STATSDIR)$@.crawl_log $(MAKE) -rf $(BINDIR)update-databanks DATABANK=$@ crawl ; fi
+	touch $(STATSDIR)$@.crawl_done
+
+clean:
+	rm -rf $(FLAGSDIR)*
+	rm -f *.depends lis.*s
+
+backup:
+	perl -i -nle 'print unless m/backup/' $(STATSDIR)failed_dbs.txt
+	( $(RUN_MAKE) -r 5 -l $(STATSDIR)backup.mirror_log \
+		sudo -u probio /usr/bin/rsync \
+			-rltvC --no-p --chmod=ugo=rwX --exclude=".svn" --exclude="status" --exclude="scratch/www"  --exclude="mongodb"\
+			--exclude="enzyme" --exclude="flags" --exclude="pdb_seqres.txt" --exclude="yasara/" --exclude="whatif/"\
+			--exclude="structure_factors" --exclude="pdb" --exclude="XML-noatom" --exclude="zata" --exclude="whatcheck"\
+			--exclude="mmCIF" --exclude="rcsb" --exclude="pdbechem" --exclude="flags" --exclude="gpcr-models"\
+			--exclude="mrs" --exclude="uniprot" --exclude="blast" --exclude="fasta" --exclude="tmp" --include="*" \
+		$(DATADIR) /research/cmbi4/data/ \
+			|| (echo backup >> $(STATSDIR)failed_dbs.txt ; /bin/false ) ; \
+		echo Backup done ; touch $(STATSDIR)backup.mirror_done ) || (echo Backup failed ; echo backup >> $(STATSDIR)failed_dbs.txt )
+#	touch $(STATSDIR)backup.mirror_done
+
+all: $(DATABANKS)
+	rm -rf $(FLAGSDIR)*
+	rm -f *.depends lis.*s
+	/data/pdb_redo/alldata.csh
+	$(WHYNOTDIR)annotate.py
+
+FORCE: ;
+
+echo-whynot:
+	echo $(WHY_NOT_DB.$(DATABANK)) $(WHY_NOT_DIR.$(DATABANK))
+
+echo-pdb-redo-ids:
+	echo $(PDB_REDO_IDS)
+
+echo-ids:
+	echo dsspids:$(DSSPIDS)
+	echo pdbfinderids:$(PDBFINDERIDS)
+	echo pdbfinder2ids:$(PDBFINDER2IDS)
+
+echo-datfiles:
+	echo $(DATFILES.$(DATABANK))
+
+echo-obsolete:
+	echo $(OBSOLETE.$(DATABANK))
+
+echo-delete:
+	echo $(DELETE.$(DATABANK))
+
+echo-outdated:
+	echo hssp: $(OUTDATED_HSSP3)
+
+wi-listfiles:
+	echo $(wildcard $(DATADIR)wi-lists/pdb/$(LIS)/*/*.$(LIS).bz2)

@@ -1,0 +1,5 @@
+#!/bin/bash
+
+rm -f `find /data/pdb_redo/tupload -mmin +60 -name *.zip`
+
+rm -f `find /data/tmp/wctemp -mtime +7`
