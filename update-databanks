@@ -12,13 +12,7 @@ pdbdiv=$(call substr,$1,2,3)
 # first target, will be used by gmake when no other target is provided
 firstTarget: all
 
-# Where we locate everything:
-DATADIR		= /data/
-BINDIR		= /data/bin/
-FASTADIR	= $(DATADIR)fasta/
-STATSDIR	= $(DATADIR)status/
-FLAGSDIR	= $(DATADIR)flags/
-WHYNOTDIR	= $(DATADIR)scratch/whynot2/
+include databanks.conf
 
 PATHS		= $(STATSDIR) $(FLAGSDIR) $(FASTADIR)
 PATHS		+= $(DATABANK:%=$(DATADIR)/%)
@@ -175,11 +169,11 @@ endif
 # pdb has priority over mmcif
 $(DATADIR)hssp3/%.hssp.bz2: /data/pdb/all/pdb%.ent.gz
 	( $(MKHSSP) -o $@ -a 1 -m 2500 --fetch-dbrefs $< -d /data/fasta/uniprot_sprot.fasta -d /data/fasta/uniprot_trembl.fasta \
-		2> /data/scratch/whynot2/hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
+		2> $(WHYNOTDIR)hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
 
 $(DATADIR)hssp3/%.hssp.bz2: /data/mmCIF/%.cif.gz
 	( $(MKHSSP) -o $@ -a 1 -m 2500 --fetch-dbrefs $< -d /data/fasta/uniprot_sprot.fasta -d /data/fasta/uniprot_trembl.fasta \
-				2> /data/scratch/whynot2/hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
+				2> $(WHYNOTDIR)hssp/$*.err ) || (echo $* >> hssp3-skip.txt ; rm -f $@)
 
 DATABANKS						+= hssp
 PRESENTHSSP3FILES					= $(wildcard $(DATADIR)hssp3/*.hssp.bz2)
@@ -456,18 +450,18 @@ clean:
 	rm -rf $(FLAGSDIR)*
 	rm -f *.depends lis.*s
 
-backup:
-	perl -i -nle 'print unless m/backup/' $(STATSDIR)failed_dbs.txt
-	( $(RUN_MAKE) -r 5 -l $(STATSDIR)backup.mirror_log \
-		sudo -u probio /usr/bin/rsync \
-			-rltvC --no-p --chmod=ugo=rwX --exclude=".svn" --exclude="status" --exclude="scratch/www"  --exclude="mongodb"\
-			--exclude="enzyme" --exclude="flags" --exclude="pdb_seqres.txt" --exclude="yasara/" --exclude="whatif/"\
-			--exclude="structure_factors" --exclude="pdb" --exclude="XML-noatom" --exclude="zata" --exclude="whatcheck"\
-			--exclude="mmCIF" --exclude="rcsb" --exclude="pdbechem" --exclude="flags" --exclude="gpcr-models"\
-			--exclude="mrs" --exclude="uniprot" --exclude="blast" --exclude="fasta" --exclude="tmp" --include="*" \
-		$(DATADIR) /research/cmbi4/data/ \
-			|| (echo backup >> $(STATSDIR)failed_dbs.txt ; /bin/false ) ; \
-		echo Backup done ; touch $(STATSDIR)backup.mirror_done ) || (echo Backup failed ; echo backup >> $(STATSDIR)failed_dbs.txt )
+#backup:
+#	perl -i -nle 'print unless m/backup/' $(STATSDIR)failed_dbs.txt
+#	( $(RUN_MAKE) -r 5 -l $(STATSDIR)backup.mirror_log \
+#		sudo -u probio /usr/bin/rsync \
+#			-rltvC --no-p --chmod=ugo=rwX --exclude=".svn" --exclude="status" --exclude="scratch/www"  --exclude="mongodb"\
+#			--exclude="enzyme" --exclude="flags" --exclude="pdb_seqres.txt" --exclude="yasara/" --exclude="whatif/"\
+#			--exclude="structure_factors" --exclude="pdb" --exclude="XML-noatom" --exclude="zata" --exclude="whatcheck"\
+#			--exclude="mmCIF" --exclude="rcsb" --exclude="pdbechem" --exclude="flags" --exclude="gpcr-models"\
+#			--exclude="mrs" --exclude="uniprot" --exclude="blast" --exclude="fasta" --exclude="tmp" --include="*" \
+#		$(DATADIR) /research/cmbi4/data/ \
+#			|| (echo backup >> $(STATSDIR)failed_dbs.txt ; /bin/false ) ; \
+#		echo Backup done ; touch $(STATSDIR)backup.mirror_done ) || (echo Backup failed ; echo backup >> $(STATSDIR)failed_dbs.txt )
 #	touch $(STATSDIR)backup.mirror_done
 
 all: $(DATABANKS)
