@@ -17,13 +17,6 @@ include databanks.conf
 PATHS		= $(STATSDIR) $(FLAGSDIR) $(FASTADIR)
 PATHS		+= $(DATABANK:%=$(DATADIR)/%)
 
-# some executables we use
-RUN_MAKE		?= /usr/local/bin/mrs-run-and-log
-PDBREDOSCRIPT	?= /data/zata/pdb_redo.csh
-MKDSSP			?= /usr/local/bin/mkdssp
-MKHSSP			?= /usr/local/bin/mkhssp
-CVHSSP			?= /usr/local/bin/hsspconv
-PERL			?= /usr/bin/perl
 
 # A generic rule to fetch the PDBIDS
 PDBIDS		= $(notdir $(wildcard $(DATADIR)pdb/all/pdb*.ent.gz))
