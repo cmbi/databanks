@@ -1,6 +1,11 @@
 #!/bin/bash
 
-whynotdir=/data/scratch/whynot2
+GetConfVar ()
+{
+    sed -n "s/^$1\\s*=\\s*\\(.*\\)/\1/p" databanks.conf
+}
+
+whynotdir=`GetConfVar WHYNOTDIR`
 
 if [ $# -ne 4 ] ; then
     exit 1

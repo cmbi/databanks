@@ -136,9 +136,9 @@ bdb.depends:
 
 # During execution, the bdb script might generate a whynot file. If it's newly created, this whynot file must be annotated.
 # Old whynot files must be unannotated if they are not the same.
-# The BDBUpdate bash script handles all this for a given pdb id.
+# The bdb-update bash script handles all this for a given pdb id.
 $(DATADIR)bdb/%.bdb: /usr/local/bin/mkbdb
-	/data/bin/BDBUpdate.bash `basename $(@D)`
+	/data/bin/bdb-update.bash `basename $(@D)`
 
 
 DATABANKS					+= hssp3

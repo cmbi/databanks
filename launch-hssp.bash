@@ -7,6 +7,7 @@ GetConfVar ()
     sed -n "s/^$1\\s*=\\s*\\(.*\\)/\1/p" databanks.conf
 }
 
+TMPDIR=`GetConfVar TMPDIR`
 DATADIR=`GetConfVar DATADIR`
 MKHSSP=`GetConfVar MKHSSP`
 CVHSSP=`GetConfVar CVHSSP`
@@ -43,7 +44,7 @@ while true ; do
                 structfile=$DATADIR'mmCIF'/$pdbid.cif.gz
             fi
 
-            tmpfile=$DATADIR'tmp'/$file
+            tmpfile=$TMPDIR$file
 
             # Run in background..
 			( $NICE -n 19 $MKHSSP -o $tmpfile -a 1 -m 2500 --fetch-dbrefs $structfile $DATABANKS && \
