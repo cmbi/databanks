@@ -10,13 +10,13 @@ set D2 = `echo $PDBID | cut -c 2-3`
 set DATE    = `date +'%G%m%d'` 
 
 #Set main variables
-setenv BASE   /data
-setenv WHYNOT /data/scratch/whynot2/comment/${DATE}WC.txt
-setenv PDB    /data/pdb/flat   
-setenv WCWORK /data/tmp/wctemp			      #WHAT_CHECK workdir
+setenv BASE   /srv/data
+setenv WHYNOT /srv/data/scratch/whynot2/comment/${DATE}WC.txt
+setenv PDB    /srv/data/pdb/flat   
+setenv WCWORK /srv/data/tmp/wctemp			      #WHAT_CHECK workdir
 setenv OUTPUT $BASE/pdbreport		          #Directory with the final results
-setenv WC     /data/whatcheck				  #whatcheck dir
-#setenv PATH   /data/whatcheck/scatterdir:$PATH
+setenv WC     /srv/data/whatcheck				  #whatcheck dir
+#setenv PATH   /srv/data/whatcheck/scatterdir:$PATH
 #echo $PATH
 
 
