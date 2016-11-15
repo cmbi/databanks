@@ -190,11 +190,11 @@ MAKE_DATA_FLAGS.dssp               = -j32 -k
 
 # pdb has priority over mmcif
 $(DATADIR)dssp/%.dssp: $(DATADIR)pdb/all/pdb%.ent.gz
-	$(MKDSSP) $< $@ || ( echo $* >> dssp_skip.txt; rm -f $@ )
+	($(MKDSSP) $< $@ 2> /srv/data/scratch/whynot2/dssp/$*.err) || ( echo $* >> dssp_skip.txt; rm -f $@ )
 	rm -f $(DATADIR)pdbfinder/data/$*.dat
 
 $(DATADIR)dssp/%.dssp: $(DATADIR)mmCIF/%.cif.gz
-	$(MKDSSP) $< $@ || ( echo $* >> dssp_skip.txt; rm -f $@ )
+	($(MKDSSP) $< $@ 2> /srv/data/scratch/whynot2/dssp/$*.err) || ( echo $* >> dssp_skip.txt; rm -f $@ )
 	rm -f $(DATADIR)pdbfinder/data/$*.dat
 
 dssp: pdb
@@ -389,7 +389,7 @@ dssp_redo.depends:
 	    > dssp_redo.depends
 
 $(DATADIR)dssp_redo/%.dssp:
-	$(MKDSSP) $(DATADIR)pdb_redo/$(call pdbdiv,$*)/$*/$*_final.pdb $(DATADIR)dssp_redo/$*.dssp || grep -q $* dssp_redo_skip.txt || ( echo $* >> dssp_redo_skip.txt; rm -f $@ )
+	($(MKDSSP) $(DATADIR)pdb_redo/$(call pdbdiv,$*)/$*/$*_final.pdb $(DATADIR)dssp_redo/$*.dssp 2> /srv/data/scratch/whynot2/dssp_redo/$*.err) || grep -q $* dssp_redo_skip.txt || ( echo $* >> dssp_redo_skip.txt; rm -f $@ )
 
 MAKE_DATA_FLAGS.dssp_redo                    = -j32
 
