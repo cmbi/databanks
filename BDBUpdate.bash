@@ -25,4 +25,6 @@ bash -c "source $CCP4SETUP; /usr/local/bin/mkbdb /srv/data/bdb/ /srv/data/pdb/fl
 /srv/data/bin/whynot-update.bash $prevwhynotfile $whynotfile $bdbfilepath bdb
 
 chmod 755 $bdbdirpath $(dirname $bdbdirpath)
-chmod 644 $bdbfilepath
+if [ -f $bdbfilepath ] ; then
+	chmod 644 $bdbfilepath
+fi
