@@ -403,8 +403,8 @@ RSYNC_DEST.XML-noatom           = $(DATADIR)XML-noatom/
 DELETE.XML-noatom                = $(FRAUDULENIDS:%=$(DATADIR)XML-noatom/%-noatom.xml.gz)
 
 DATABANKS                        += uniprot
-RSYNC_URL.uniprot                = rsync://ftp.ebi.ac.uk/pub/databases/swissprot/release/
-RSYNC_OPTIONS.uniprot            += --include='uniprot_*.fasta.gz' --include='README' --include='reldate*' --include='uniprot_*.dat.gz' --exclude='*'
+WGET_SOURCE.uniprot		= ftp://ftp.ebi.ac.uk/pub/databases/uniprot/current_release/knowledgebase/complete/
+WGET_OPTIONS.uniprot            += --accept='uniprot_*.fasta.gz,README,reldate*,uniprot_*.dat.gz'
 DATFILES.uniprot                = $(FASTADIR)uniprot_sprot.fasta $(FASTADIR)uniprot_trembl.fasta
 
 include hb2.depends

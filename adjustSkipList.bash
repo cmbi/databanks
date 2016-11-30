@@ -5,6 +5,10 @@ if [ $# -ne 1 ] ; then exit 1 ; fi
 listfile=$1
 tempfile=/tmp/$(basename $listfile)
 
+if ! [ -f $listfile ] ; then
+	touch $listfile
+fi
+
 cp $listfile $tempfile
 
 for id in $(cat $listfile) ; do
