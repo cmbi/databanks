@@ -572,11 +572,6 @@ all: $(DATABANKS)
 	rm -f *.depends lis.*s
 	/srv/data/pdb_redo/alldata.csh
 	$(WHYNOTDIR)annotate.py
-<<<<<<< Updated upstream
-#	$(WHYNOTDIR)run_scripts.sh
-#	$(WHYNOTDIR)run_annotater.sh
-=======
->>>>>>> Stashed changes
 
 FORCE: ;
 
