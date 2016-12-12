@@ -65,8 +65,8 @@ DATABANKS += go
 WGET_SOURCE.go = ftp://ftp.geneontology.org/pub/go/ontology/gene_ontology.obo
 
 DATABANKS += embl
-RSYNC_URL.embl = rsync://ftp.ebi.ac.uk/pub/databases/embl/release/
-RSYNC_OPTIONS.embl = -aLv --delete --include='*/' --include='*.dat.gz' --exclude='*'
+WGET_SOURCE.embl = ftp://ftp.ebi.ac.uk/pub/databases/ena/sequence/release/
+WGET_OPTIONS.embl = -m --no-host-directories --cut-dirs=4 --accept '*.dat.gz'
 
 DATABANKS += interpro
 WGET_SOURCE.interpro = ftp://ftp.ebi.ac.uk/pub/databases/interpro/current/interpro.xml.gz
@@ -232,7 +232,7 @@ DATFILES.hssp3                    = $(HSSP3IDS:%=$(DATADIR)hssp3/%.hssp.bz2)
 DELETE.hssp3                    += $(filter-out $(STRUCTIDS:%=$(DATADIR)hssp3/%.hssp.bz2), $(wildcard $(DATADIR)hssp3/*))
 SORTED_HSSP3                    = $(shell ls -rt $(DATADIR)hssp3/)
 DATFILES.hssp3                    += $(OUTDATED_HSSP3)
-MAKE_DATA_FLAGS.hssp3            = -j32 -k
+MAKE_DATA_FLAGS.hssp3            = -j20 -k
 
 hssp3: pdb uniprot
 
@@ -291,7 +291,7 @@ DATABANKS                        += pdbfinder2
 DATFILES.pdbfinder2                = $(DATADIR)pdbfinder2/PDBFIND2.TXT
 #CHECKDBFILES                    = $(shell find /srv/data/pdbreport/checkdb/ -name *.cdb.gz)
 #CHECKDBIDS                    = $(CHECKDBFILES:/srv/data/pdbreport/checkdb/%.cdb.gz=%)
-PDBFINDER2IDS                    = $(filter-out $(shell cat $(STATSDIR)pdbfinder2_skip.txt), $(PDBFINDERIDS))
+PDBFINDER2IDS                    = $(PDBFINDERIDS)
 DATFILES2.pdbfinder2            = $(PDBFINDER2IDS:%=$(DATADIR)pdbfinder2/data/%.dat)
 DELETE.pdbfinder2                = $(filter-out $(PDBFINDERIDS:%=$(DATADIR)pdbfinder2/data/%.dat), $(wildcard $(DATADIR)pdbfinder2/data/*.dat))
 WHY_NOT_DIR.pdbfinder2            = $(DATADIR)$(DATABANK)/PDBFIND2.TXT
@@ -362,7 +362,7 @@ PDB_REDO.DELETE                 = $(PDB_REDO_FLAG_DELETE) $(PDB_REDO_DIR_DELETE)
 # - Each job may run for x days at most. If it times out, send a comment to /srv/data/zata/whynot.txt
 # - Run each pdbid only once. After one failure, register it in pdbredo_skip.txt.
 $(DATADIR)pdb_redo/flags/%: $(DATADIR)structure_factors/r%sf.ent.gz
-	perl flag_file_is_older_than_x_days.pl start_data_flag 3
+	./file-older-than-x-days start_data_flag 3
 	/usr/bin/timeout 3d /bin/bash -c '$(PDBREDOSCRIPT) $* && touch $@ || echo $* >> $(PDBREDOSKIP)' || \
 	    (/bin/echo -e "COMMENT: PDB REDO script timed out\nPDB_REDO, $*" >> /srv/data/zata/whynot.txt; echo $* >> $(PDBREDOSKIP))
 	p=`find $(DATADIR)pdb_redo/ -name $*_final_tot.pdb | head -n1`; \
@@ -572,8 +572,11 @@ all: $(DATABANKS)
 	rm -f *.depends lis.*s
 	/srv/data/pdb_redo/alldata.csh
 	$(WHYNOTDIR)annotate.py
+<<<<<<< Updated upstream
 #	$(WHYNOTDIR)run_scripts.sh
 #	$(WHYNOTDIR)run_annotater.sh
+=======
+>>>>>>> Stashed changes
 
 FORCE: ;
 
