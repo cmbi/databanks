@@ -362,7 +362,6 @@ PDB_REDO.DELETE                 = $(PDB_REDO_FLAG_DELETE) $(PDB_REDO_DIR_DELETE)
 # - Each job may run for x days at most. If it times out, send a comment to /srv/data/zata/whynot.txt
 # - Run each pdbid only once. After one failure, register it in pdbredo_skip.txt.
 $(DATADIR)pdb_redo/flags/%: $(DATADIR)structure_factors/r%sf.ent.gz
-	./file-older-than-x-days start_data_flag 3
 	/usr/bin/timeout 3d /bin/bash -c '$(PDBREDOSCRIPT) $* && touch $@ || echo $* >> $(PDBREDOSKIP)' || \
 	    (/bin/echo -e "COMMENT: PDB REDO script timed out\nPDB_REDO, $*" >> /srv/data/zata/whynot.txt; echo $* >> $(PDBREDOSKIP))
 	p=`find $(DATADIR)pdb_redo/ -name $*_final_tot.pdb | head -n1`; \
