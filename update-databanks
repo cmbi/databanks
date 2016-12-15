@@ -420,16 +420,16 @@ ifneq (,$(findstring wi_list_,$(DATABANK)))
 INPUTTYPE                = $(word 3,$(subst _, ,$(DATABANK)))
 LIS                         = $(lastword $(subst _, ,$(DATABANK)))
 include $(DATABANK).depends
-#WHY_NOT_DB.$(DATABANK)            = WHATIF_$(call uc,$(INPUTTYPE))_$(LIS)
-#WHY_NOT_DIR.$(DATABANK)            = $(DATADIR)wi-lists/$(INPUTTYPE)/$(LIS)/
+WHY_NOT_DB.$(DATABANK)            = WHATIF_$(call uc,$(INPUTTYPE))_$(LIS)
+WHY_NOT_DIR.$(DATABANK)            = $(DATADIR)wi-lists/$(INPUTTYPE)/$(LIS)/
 endif
 
 ifneq (,$(findstring wi_scenes_,$(DATABANK)))
 INPUTTYPE                               = $(word 3,$(subst _, ,$(DATABANK)))
 LIS                                     = $(lastword $(subst _, ,$(DATABANK)))
 include $(DATABANK).depends
-#WHY_NOT_DB.$(DATABANK)                  = $(call uc,$(INPUTTYPE))_SCENES_$(LIS)
-#WHY_NOT_DIR.$(DATABANK)                 = $(DATADIR)wi-lists/$(INPUTTYPE)/scenes/$(LIS)/
+WHY_NOT_DB.$(DATABANK)                  = $(call uc,$(INPUTTYPE))_SCENES_$(LIS)
+WHY_NOT_DIR.$(DATABANK)                 = $(DATADIR)wi-lists/$(INPUTTYPE)/scenes/$(LIS)/
 endif
 
 LISTYPES = acc cal cc1 cc2 cc3 chi dsp iod sbh sbr ss1 ss2 tau wat
