@@ -6,5 +6,5 @@ if [ -f $1 ] ; then
 fi
 
 for db in $dbs ; do
-	/usr/bin/docker run -v "/srv/data:/srv/mrs-data/raw" -v "/srv/mrs:/srv/mrs-data/mrs" -it mrs_mrs ./mrs build $db > /srv/data/status/$db.mrs_log
+	/usr/bin/docker run -v "/srv/data:/srv/mrs-data/raw" -v "/srv/mrs:/srv/mrs-data/mrs" -t mrs_mrs ./mrs build $db > /srv/data/status/$db.mrs_log 2>&1
 done
