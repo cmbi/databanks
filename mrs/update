@@ -1,10 +1,13 @@
 #!/bin/bash
-
 dbs=$@
 if [ -f $1 ] ; then
 	dbs=`cat $1`
 fi
 
+# Update databanks:
 for db in $dbs ; do
-	/usr/bin/docker run -v "/srv/data:/srv/mrs-data/raw" -v "/srv/mrs:/srv/mrs-data/mrs" -it mrs_mrs ./mrs build $db
+	/usr/bin/docker run -v "/srv/data:/srv/mrs-data/raw" -v "/srv/mrs:/srv/mrs-data/mrs" -t mrs_mrs ./mrs build $db > /srv/data/status/$db.mrs_log 2>&1
 done
+
+# Restart the server:
+/usr/bin/docker restart `/usr/bin/docker ps | grep 'mrs server start' | /usr/bin/cut -d" " -f1`
