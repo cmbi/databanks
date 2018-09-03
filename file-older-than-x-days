@@ -1,9 +1,0 @@
-#!/bin/bash
-
-age=$(/usr/bin/stat -c %Y $1)
-now=$(date +%s)
-
-seconds=$(expr $now - $age)
-days=$(expr $seconds / 86400)
-
-test $days -ge 3

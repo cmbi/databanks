@@ -1,2 +1,16 @@
-The file 'cron' contains the crontab lines used on the databank server.
-The other scripts included are used by these cron jobs.
+# Requires:
+* whynot 2: https://github.com/cmbi/whynot2
+* python pip: https://pypi.org/project/pip/
+* crontab
+
+
+# installing:
+Execute 'install.sh' as root. This does not modify the crontab file.
+
+
+# Scheduling updates:
+Add the lines from file 'cron' to your crontab
+
+
+# Running interactive tests:
+python tests/interactive/<test name>.py

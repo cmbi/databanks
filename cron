@@ -19,14 +19,12 @@
 # 
 # For more information see the manual pages of crontab(5) and cron(8)
 # 
+PATH=/usr/local/bin:/usr/bin:/bin
+LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/lib:/usr/lib:/lib
 # m h  dom mon dow   command
-
-0 20 * * 1,3,5 /data/bin/run-update-from-cron.sh
-
-30 20 * * 1 /data/bin/backup.sh
-
-0 * * * * if ! [ "`/usr/bin/pgrep annotate.py`" ] ; then /data/scratch/whynot2/annotate.py ; fi
-
-0 * * * * /data/bin/cleanup
-
-0 * * * * /data/bin/keep-running /data/bin/launch-hssp.bash
+0 20 * * 6 /srv/data/bin/backup.sh
+0 20 * * 1,3,5 /usr/bin/python /srv/data/bin/databanks/update.py
+0 * * * * if ! pgrep annotate\.py ; then /usr/bin/timeout 3h /srv/data/scratch/whynot2/annotate.py ; fi
+0 20 * * 5 /srv/data/bin/mrs/update /srv/data/bin/mrs/weekly
+0 20 * * * /srv/data/bin/mrs/update /srv/data/bin/mrs/daily
+0 * * * * /srv/data/bin/cleanup
