@@ -38,13 +38,6 @@ def scene_uptodate(src, lis_type, pdbid):
     whynot_path = os.path.join(dir_path,
                                "%s_%s.whynot" % (pdbid, lis_names[lis_type]))
 
-    # Check for meaningless comments:
-    if os.path.isfile(whynot_path):
-        with open(whynot_path, 'r') as f:
-            line = f.readline()
-            if line == "COMMENT: Error creating YASARA scene\n":
-                os.remove(whynot_path)
-
     for path in [sce_path, whynot_path]:
         if os.path.isfile(path) and (not os.path.isfile(in_path) or \
                 os.path.getmtime(path) >= os.path.getmtime(in_path)):
