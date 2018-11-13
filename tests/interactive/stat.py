@@ -5,6 +5,7 @@ from time import strftime, gmtime
 root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(root_dir)
 
+from databanks.pdbreport import pdbreport_uptodate, pdbreport_obsolete, pdbreport_path
 from databanks.pdbredo import pdbredo_uptodate, pdbredo_obsolete, final_path
 from databanks.structurefactors import structurefactors_path
 from databanks.mmcif import mmcif_path
@@ -83,6 +84,16 @@ if len(sys.argv) == 2:
         print "\tmodification time:", s_mtime(final_path(pdbid))
         print "\tup to date:", yesno(pdbredo_uptodate(pdbid))
         print "\tobsolete:", yesno(pdbredo_obsolete(pdbid))
+    else:
+        print "\t<absent>"
+
+    print "pdbreport:"
+    path = pdbreport_path(pdbid)
+    print "\tpath:", path
+    if os.path.isfile(path):
+        print "\tmodification time:", s_mtime(pdbreport_path(pdbid))
+        print "\tup to date:", yesno(pdbreport_uptodate(pdbid))
+        print "\tobsolete:", yesno(pdbreport_obsolete(pdbid))
     else:
         print "\t<absent>"
 
