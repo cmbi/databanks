@@ -1,4 +1,5 @@
 import os
+from bz2 import BZ2File
 from subprocess import Popen, PIPE
 
 from databanks.queue import Job
@@ -21,12 +22,20 @@ def find_input(pdbid):
     else:
         return cif_path
 
+def is_empty_file(path):
+    if os.path.getsize(path) <= 0:
+        return True
+
+    with BZ2File(path, 'r') as f:
+        return len(f.read()) <= 0
+
 def hssp_uptodate(pdbid):
     in_path = mmcif_path(pdbid)
     out_path = hssp1_path(pdbid)
 
     return os.path.isfile(out_path) and \
-        os.path.getmtime(out_path) >= os.path.getmtime(in_path)
+        os.path.getmtime(out_path) >= os.path.getmtime(in_path) and \
+        not is_empty_file(path)
 
 def hssp3_path(pdbid):
     return os.path.join(settings["DATADIR"],
