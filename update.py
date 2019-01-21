@@ -5,6 +5,7 @@ from databanks.lock import FileLock
 from databanks.queue import Queue
 from databanks.whynot import WhynotCrawlJob
 from databanks.pdbredo import PdbredoCleanupJob
+from databanks.structurefactors import StructurefactorsCleanupJob
 from databanks.data import (ScheduleMmcifDataJob, SchedulePdbDataJob,
                             SchedulePdbredoDataJob)
 from databanks.fetch import (FetchPdbJob, FetchMmcifJob, FetchNmrJob,
@@ -62,6 +63,7 @@ if __name__ == "__main__":
         queue.put(ScheduleMmcifDataJob(queue, mmcif_job, pdb_job, uniprot_job))
         queue.put(SchedulePdbDataJob(queue, pdb_job))
         queue.put(SchedulePdbredoDataJob(queue, pdbredo_job))
+        queue.put(StructurefactorsCleanupJob(sf_jobm, mmcif_job))
         queue.put(PdbredoCleanupJob(sf_job))
 
         queue.put(WhynotCrawlJob('MMCIF',
