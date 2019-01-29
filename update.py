@@ -63,7 +63,7 @@ if __name__ == "__main__":
         queue.put(ScheduleMmcifDataJob(queue, mmcif_job, pdb_job, uniprot_job))
         queue.put(SchedulePdbDataJob(queue, pdb_job))
         queue.put(SchedulePdbredoDataJob(queue, pdbredo_job))
-        queue.put(StructurefactorsCleanupJob(sf_jobm, mmcif_job))
+        queue.put(StructurefactorsCleanupJob(sf_job, mmcif_job))
         queue.put(PdbredoCleanupJob(sf_job))
 
         queue.put(WhynotCrawlJob('MMCIF',

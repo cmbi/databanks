@@ -1,6 +1,7 @@
 import os
 from databanks.settings import settings
 from databanks.mmcif import mmcif_path
+from databanks.queue import Job
 
 
 def structurefactors_path(pdbid):
