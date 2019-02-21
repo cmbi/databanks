@@ -35,7 +35,7 @@ def hssp_uptodate(pdbid):
 
     return os.path.isfile(out_path) and \
         os.path.getmtime(out_path) >= os.path.getmtime(in_path) and \
-        not is_empty_file(path)
+        not is_empty_file(out_path)
 
 def hssp3_path(pdbid):
     return os.path.join(settings["DATADIR"],
