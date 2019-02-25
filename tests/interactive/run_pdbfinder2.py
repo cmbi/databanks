@@ -10,8 +10,9 @@ from databanks.pdbfinder2 import Pdbfinder2DatJob, Pdbfinder2JoinJob
 
 if len(sys.argv) == 1:
     Pdbfinder2JoinJob().run()
-elif len(sys.argv) == 2:
-    Pdbfinder2DatJob(sys.argv[1]).run()
+elif len(sys.argv) > 1:
+    for pdbid in sys.argv[1:]:
+        Pdbfinder2DatJob(pdbid).run()
 else:
     print "Usage: %s pdbid" % sys.argv[0]
     print "Usage: %s" % sys.argv[0]

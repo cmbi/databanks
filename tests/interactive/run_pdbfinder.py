@@ -8,10 +8,12 @@ root_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 sys.path.append(root_path)
 from databanks.pdbfinder import PdbfinderDatJob, PdbfinderJoinJob
 
+
 if len(sys.argv) == 1:
     PdbfinderJoinJob().run()
-elif len(sys.argv) == 2:
-    PdbfinderDatJob(sys.argv[1]).run()
+elif len(sys.argv) > 1:
+    for pdbid in sys.argv[1:]:
+        PdbfinderDatJob(pdbid).run()
 else:
     print "Usage: %s pdbid" % sys.argv[0]
     print "Usage: %s" % sys.argv[0]
