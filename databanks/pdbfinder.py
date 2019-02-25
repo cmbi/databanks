@@ -16,7 +16,7 @@ pdbfinder_dir = os.path.join(settings["DATADIR"], "pdbfinder/")
 
 
 def dat_path(pdbid):
-    return os.path.join(pdbfinder_dir, 'data/%s.dat' % pdbid)
+    return os.path.join(pdbfinder_dir, 'data/%s.dat' % pdbid.lower())
 
 def pdbfinder_uptodate(pdbid):
     in_path = mmcif_path(pdbid)
@@ -49,11 +49,13 @@ class PdbfinderDatJob(Job):
         out_path = dat_path(self._pdbid)
         with open(out_path, 'w') as f:
             p = Popen([MKPDBFINDER, '-H'],
-                      stdout=f, stderr=PIPE, stdin=PIPE,
-                      cwd="/srv/data/prog/pdbfinder")
-            p.stdin.write(self._pdbid)
+                       stdout=f, stderr=PIPE, stdin=PIPE,
+                       cwd="/srv/data/prog/pdbfinder")
+            p.stdin.write(self._pdbid.lower())
             p.stdin.close()
-            p.wait()
+            r = p.wait()
+            if r != 0:
+                _log.warn("[pdbfinder] mkpdbfinder returned {}".format(r))
             for line in p.stderr:
                 _log.error("[pdbfinder] %s" % line.strip())
 
@@ -70,8 +72,8 @@ class PdbfinderJoinJob(Job):
         _log.debug("[pdbfinder] generating %s" % out_file)
         with open(out_file, 'w') as f:
             p = Popen([MKPDBFINDER, '-A', dat_dir],
-                      stdout=f, stderr=PIPE,
-                      cwd="/srv/data/prog/pdbfinder")
+                       stdout=f, stderr=PIPE,
+                       cwd="/srv/data/prog/pdbfinder")
             p.wait()
             for line in p.stderr:
                 _log.error("[pdbfinder] %s" % line.strip())
