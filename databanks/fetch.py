@@ -6,7 +6,7 @@ from databanks.data import list_pdbgz, list_mmcif, list_pdbredo
 from databanks.settings import settings
 from databanks.command import log_command
 from ftplib import FTP
-from urllib import urlopen
+from urllib.request import urlopen
 
 import logging
 _log = logging.getLogger(__name__)
@@ -125,41 +125,39 @@ class FetchGoJob(Job):
         Job.__init__(self, "fetch_go")
 
     def run(self):
-        ftp = FTP('ftp.geneontology.org')
-        ftp.login()
-        ftp.cwd('pub/go/ontology/')
-        destdir = os.path.join(settings["DATADIR"], 'go')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir, 'gene_ontology.obo'), 'wb') as f:
-            _log.info("[go] retrieve gene_ontology.obo")
-            ftp.retrbinary('RETR gene_ontology.obo', f.write)
-        ftp.quit()
+        with FTP('ftp.geneontology.org') as ftp:
+            ftp.login()
+            ftp.cwd('pub/go/ontology/')
+            destdir = os.path.join(settings["DATADIR"], 'go')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir, 'gene_ontology.obo'), 'wb') as f:
+                _log.info("[go] retrieve gene_ontology.obo")
+                ftp.retrbinary('RETR gene_ontology.obo', f.write)
 
 class FetchEmblJob(Job):
     def __init__(self):
         Job.__init__(self, "fetch_embl")
 
     def run(self):
-        ftp = FTP('ftp.ebi.ac.uk')
-        ftp.login()
-        ftp.cwd('pub/databases/ena/sequence/release/')
-        destdir = os.path.join(settings["DATADIR"], 'embl')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        for dirname in ftp.nlst():
-            for filename in ftp.nlst(dirname):
-                filename = os.path.basename(filename)
-                if filename.endswith('.dat.gz'):
-                    rpath = os.path.join(dirname, filename)
-                    dpath = os.path.join(destdir, dirname)
-                    if not os.path.isdir(dpath):
-                        os.mkdir(dpath)
-                    path = os.path.join(destdir, rpath)
-                    with open(path, 'wb') as f:
-                        _log.info("[embl] retrieve %s" % rpath)
-                        ftp.retrbinary('RETR %s' % rpath, f.write)
-        ftp.quit()
+        with FTP('ftp.ebi.ac.uk') as ftp:
+            ftp.login()
+            ftp.cwd('pub/databases/ena/sequence/release/')
+            destdir = os.path.join(settings["DATADIR"], 'embl')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            for dirname in ftp.nlst():
+                for filename in ftp.nlst(dirname):
+                    filename = os.path.basename(filename)
+                    if filename.endswith('.dat.gz'):
+                        rpath = os.path.join(dirname, filename)
+                        dpath = os.path.join(destdir, dirname)
+                        if not os.path.isdir(dpath):
+                            os.mkdir(dpath)
+                        path = os.path.join(destdir, rpath)
+                        with open(path, 'wb') as f:
+                            _log.info("[embl] retrieve %s" % rpath)
+                            ftp.retrbinary('RETR %s' % rpath, f.write)
 
 class FetchUniprotJob(Job):
     def __init__(self):
@@ -178,7 +176,7 @@ class FetchUniprotJob(Job):
             log_command(_log, 'uniprot',
                 '/usr/bin/wget' +
                 ' ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/%s' % filename +
-                ' -P %s' % uniprot_dir,
+                ' -N -P %s' % uniprot_dir,
                 timeout=24*60*60
             )
 
@@ -211,64 +209,60 @@ class FetchInterproJob(Job):
         Job.__init__(self, "fetch_interpro")
 
     def run(self):
-        ftp = FTP('ftp.ebi.ac.uk')
-        ftp.login()
-        ftp.cwd('pub/databases/interpro/current/')
-        destdir = os.path.join(settings["DATADIR"], 'interpro')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir, 'interpro.xml.gz'), 'wb') as f:
-            _log.info("[interpro] retrieve interpro.xml.gz")
-            ftp.retrbinary('RETR interpro.xml.gz', f.write)
-        ftp.quit()
+        with FTP('ftp.ebi.ac.uk') as ftp:
+            ftp.login()
+            ftp.cwd('pub/databases/interpro/current/')
+            destdir = os.path.join(settings["DATADIR"], 'interpro')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir, 'interpro.xml.gz'), 'wb') as f:
+                _log.info("[interpro] retrieve interpro.xml.gz")
+                ftp.retrbinary('RETR interpro.xml.gz', f.write)
 
 class FetchMimmapJob(Job):
     def __init__(self):
         Job.__init__(self, "fetch_mimmap")
 
     def run(self):
-        ftp = FTP('ftp.ncbi.nih.gov')
-        ftp.login()
-        ftp.cwd('repository/OMIM/ARCHIVE')
-        destdir = os.path.join(settings["DATADIR"], 'mimmap')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir, 'genemap'), 'wb') as f:
-            _log.info("[mimmap] retrieve genemap")
-            ftp.retrbinary('RETR genemap', f.write)
-        ftp.quit()
+        with FTP('ftp.ncbi.nih.gov') as ftp:
+            ftp.login()
+            ftp.cwd('repository/OMIM/ARCHIVE')
+            destdir = os.path.join(settings["DATADIR"], 'mimmap')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir, 'genemap'), 'wb') as f:
+                _log.info("[mimmap] retrieve genemap")
+                ftp.retrbinary('RETR genemap', f.write)
 
 class FetchOmimJob(Job):
     def __init__(self):
         Job.__init__(self, "fetch_omim")
 
     def run(self):
-        ftp = FTP('ftp.ncbi.nih.gov')
-        ftp.login()
-        ftp.cwd('repository/OMIM/ARCHIVE')
-        destdir = os.path.join(settings["DATADIR"], 'omim')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir, 'omim.txt.Z'), 'wb') as f:
-            _log.info("[omim] retrieve omim.txt.Z")
-            ftp.retrbinary('RETR omim.txt.Z', f.write)
-        ftp.quit()
+        with FTP('ftp.ncbi.nih.gov') as ftp:
+            ftp.login()
+            ftp.cwd('repository/OMIM/ARCHIVE')
+            destdir = os.path.join(settings["DATADIR"], 'omim')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir, 'omim.txt.Z'), 'wb') as f:
+                _log.info("[omim] retrieve omim.txt.Z")
+                ftp.retrbinary('RETR omim.txt.Z', f.write)
 
 class FetchOxfordJob(Job):
     def __init__(self):
         Job.__init__(self, "fetch_oxford")
 
     def run(self):
-        ftp = FTP('ftp.informatics.jax.org')
-        ftp.login()
-        ftp.cwd('pub/reports')
-        destdir = os.path.join(settings["DATADIR"], 'oxford')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir,'HMD_HumanPhenotype.rpt'), 'wb') as f:
-            _log.info("[oxford] retrieve HMD_HumanPhenotype.rpt")
-            ftp.retrbinary('RETR HMD_HumanPhenotype.rpt', f.write)
-        ftp.quit()
+        with FTP('ftp.informatics.jax.org') as ftp:
+            ftp.login()
+            ftp.cwd('pub/reports')
+            destdir = os.path.join(settings["DATADIR"], 'oxford')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir,'HMD_HumanPhenotype.rpt'), 'wb') as f:
+                _log.info("[oxford] retrieve HMD_HumanPhenotype.rpt")
+                ftp.retrbinary('RETR HMD_HumanPhenotype.rpt', f.write)
 
 class FetchPfamJob(Job):
     def __init__(self):
@@ -282,6 +276,7 @@ class FetchPfamJob(Job):
             " %s" % os.path.join(settings["DATADIR"], 'pfam/'),
             timeout=24*60*60
         )
+
 class FetchPmcJob(Job):
     def __init__(self):
         Job.__init__(self, "fetch_pmc")
@@ -326,16 +321,15 @@ class FetchRebaseJob(Job):
         Job.__init__(self, "fetch_rebase")
 
     def run(self):
-        ftp = FTP('ftp.neb.com')
-        ftp.login()
-        ftp.cwd('pub/rebase/')
-        destdir = os.path.join(settings["DATADIR"], 'rebase')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir, 'bairoch.txt'), 'wb') as f:
-            _log.info("[rebase] retrieve bairoch.txt")
-            ftp.retrbinary('RETR bairoch.txt', f.write)
-        ftp.quit()
+        with FTP('ftp.neb.com') as ftp:
+            ftp.login()
+            ftp.cwd('pub/rebase/')
+            destdir = os.path.join(settings["DATADIR"], 'rebase')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir, 'bairoch.txt'), 'wb') as f:
+                _log.info("[rebase] retrieve bairoch.txt")
+                ftp.retrbinary('RETR bairoch.txt', f.write)
 
 class FetchRefseqJob(Job):
     def __init__(self):
@@ -355,16 +349,15 @@ class FetchTaxonomyJob(Job):
         Job.__init__(self, "fetch_taxonomy")
 
     def run(self):
-        ftp = FTP('ftp.ebi.ac.uk')
-        ftp.login()
-        ftp.cwd('pub/databases/taxonomy/')
-        destdir = os.path.join(settings["DATADIR"], 'taxonomy')
-        if not os.path.isdir(destdir):
-            os.mkdir(destdir)
-        with open(os.path.join(destdir,'taxonomy.dat'), 'wb') as f:
-            _log.info("[taxonomy] retrieve taxonomy.dat")
-            ftp.retrbinary('RETR taxonomy.dat', f.write)
-        ftp.quit()
+        with FTP('ftp.ebi.ac.uk') as ftp:
+            ftp.login()
+            ftp.cwd('pub/databases/taxonomy/')
+            destdir = os.path.join(settings["DATADIR"], 'taxonomy')
+            if not os.path.isdir(destdir):
+                os.mkdir(destdir)
+            with open(os.path.join(destdir,'taxonomy.dat'), 'wb') as f:
+                _log.info("[taxonomy] retrieve taxonomy.dat")
+                ftp.retrbinary('RETR taxonomy.dat', f.write)
 
 class FetchUnigeneJob(Job):
     def __init__(self):

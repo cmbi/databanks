@@ -13,4 +13,4 @@ parser = ArgumentParser(description="count the number of hits in a hssp file")
 parser.add_argument("pdbid", help="four letter code of pdb entry")
 args = parser.parse_args()
 
-print count_hits(hssp3_path(args.pdbid))
+print(count_hits(hssp3_path(args.pdbid)))

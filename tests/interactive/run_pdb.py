@@ -17,5 +17,5 @@ if len(sys.argv) == 1:
 elif len(sys.argv) == 2:
     PdbExtractJob(pdb_path(sys.argv[1])).run()
 else:
-    print "Usage: %s pdbid" % sys.argv[0]
-    print "Usage: %s" % sys.argv[0]
+    print("Usage: %s pdbid" % sys.argv[0])
+    print("Usage: %s" % sys.argv[0])

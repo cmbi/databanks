@@ -27,87 +27,87 @@ def s_mtime(path):
 if len(sys.argv) == 2:
     pdbid = sys.argv[1]
 
-    print "mmcif:"
+    print("mmcif:")
     path = mmcif_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(path)
+        print("\tmodification time:", s_mtime(path))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
-    print "pdb:"
+    print("pdb:")
     for path in [pdb_path(pdbid), pdb_flat_path(pdbid)]:
-        print "\tpath:", path
+        print("\tpath:", path)
         if os.path.isfile(path):
-            print "\tmodification time:", s_mtime(path)
+            print("\tmodification time:", s_mtime(path))
         else:
-            print "\t<absent>"
+            print("\t<absent>")
 
-    print "bdb:"
+    print("bdb:")
     path = bdb_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isdir(path):
-        print "\tmodification time:", s_mtime(path)
-        print "\tup to date:", yesno(bdb_uptodate(pdbid))
-        print "\tobsolete:", yesno(bdb_obsolete(pdbid))
+        print("\tmodification time:", s_mtime(path))
+        print("\tup to date:", yesno(bdb_uptodate(pdbid)))
+        print("\tobsolete:", yesno(bdb_obsolete(pdbid)))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
-    print "hssp:"
+    print("hssp:")
     path = hssp3_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(path)
+        print("\tmodification time:", s_mtime(path))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
     path = hssp1_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(path)
-        print "\tup to date:", yesno(hssp_uptodate(pdbid))
-        print "\tobsolete:", yesno(hssp_obsolete(pdbid))
+        print("\tmodification time:", s_mtime(path))
+        print("\tup to date:", yesno(hssp_uptodate(pdbid)))
+        print("\tobsolete:", yesno(hssp_obsolete(pdbid)))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
-    print "structure factors:"
+    print("structure factors:")
     path = structurefactors_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(path)
+        print("\tmodification time:", s_mtime(path))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
-    print "pdbredo:"
+    print("pdbredo:")
     path = final_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(final_path(pdbid))
-        print "\tup to date:", yesno(pdbredo_uptodate(pdbid))
-        print "\tobsolete:", yesno(pdbredo_obsolete(pdbid))
+        print("\tmodification time:", s_mtime(final_path(pdbid)))
+        print("\tup to date:", yesno(pdbredo_uptodate(pdbid)))
+        print("\tobsolete:", yesno(pdbredo_obsolete(pdbid)))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
-    print "pdbreport:"
+    print("pdbreport:")
     path = pdbreport_path(pdbid)
-    print "\tpath:", path
+    print("\tpath:", path)
     if os.path.isfile(path):
-        print "\tmodification time:", s_mtime(pdbreport_path(pdbid))
-        print "\tup to date:", yesno(pdbreport_uptodate(pdbid))
-        print "\tobsolete:", yesno(pdbreport_obsolete(pdbid))
+        print("\tmodification time:", s_mtime(pdbreport_path(pdbid)))
+        print("\tup to date:", yesno(pdbreport_uptodate(pdbid)))
+        print("\tobsolete:", yesno(pdbreport_obsolete(pdbid)))
     else:
-        print "\t<absent>"
+        print("\t<absent>")
 
     for src in ['pdb', 'redo']:
         for lis_type in lis_types:
             print src, lis_type + ':'
             path = wilist_data_path(src, lis_type, pdbid)
-            print "\tpath:", path
+            print("\tpath:", path)
             if os.path.isfile(path):
-                print "\tmodification time:", s_mtime(path)
-                print "\tup to date:", yesno(wilist_uptodate(src, lis_type, pdbid))
-                print "\tobsolete:", yesno(wilist_obsolete(src, lis_type, pdbid))
+                print("\tmodification time:", s_mtime(path))
+                print("\tup to date:", yesno(wilist_uptodate(src, lis_type, pdbid)))
+                print("\tobsolete:", yesno(wilist_obsolete(src, lis_type, pdbid)))
             else:
-                print "\t<absent>"
+                print("\t<absent>")
 
 else:
-    print "Usage: %s pdbid" % sys.argv[0]
+    print("Usage: %s pdbid" % sys.argv[0])

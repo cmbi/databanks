@@ -73,7 +73,7 @@ def log_command(log, tag, cmdstr,
                   stdout=PIPE, stderr=PIPE, stdin=PIPE,
                   close_fds=True,
                   cwd=cwd)
-        p.stdin.write(strin)
+        p.stdin.write(strin.encode('ascii'))
         p.stdin.close()
     else:
         p = Popen(cmdstr, shell=True,
@@ -82,18 +82,26 @@ def log_command(log, tag, cmdstr,
                   cwd=cwd)
     log.info("[%s] %s" % (tag, cmdstr))
 
-    _LogStdoutThread(p, log, tag).start()
-    _LogStderrThread(p, log, tag).start()
+    tout = _LogStdoutThread(p, log, tag)
+    tout.start()
+    terr = _LogStderrThread(p, log, tag)
+    terr.start()
 
     t0 = time()
     if timeout is not None:
         while (time() - t0) < timeout:
             sleep(1)
             if p.poll() is not None:
+                tout.join()
+                terr.join()
                 return True
 
         kill_process_tree(p.pid)
+        tout.join()
+        terr.join()
         return False
     else:
         p.wait()
+        tout.join()
+        terr.join()
         return True

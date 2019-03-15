@@ -1,5 +1,4 @@
 import os
-import commands
 from gzip import GzipFile
 
 from databanks.queue import Job
@@ -68,7 +67,7 @@ class Pdbfinder2JoinJob(Job):
 
         _log.debug("[pdbfinder2] compressing %s" % out_file)
         with GzipFile(gz_file, 'wb') as g:
-            with open(out_file, 'r') as f:
+            with open(out_file, 'rb') as f:
                 while True:
                     chunk = f.read(1024)
                     if len(chunk) <= 0:

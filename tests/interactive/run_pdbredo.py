@@ -12,4 +12,4 @@ from databanks.fetch import FetchPdbredoJob
 if len(sys.argv) == 1:
     FetchPdbredoJob().run()
 else:
-    print "Usage: %s" % sys.argv[0]
+    print("Usage: %s" % sys.argv[0])

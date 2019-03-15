@@ -15,5 +15,5 @@ elif len(sys.argv) > 1:
     for pdbid in sys.argv[1:]:
         PdbfinderDatJob(pdbid).run()
 else:
-    print "Usage: %s pdbid" % sys.argv[0]
-    print "Usage: %s" % sys.argv[0]
+    print("Usage: %s pdbid" % sys.argv[0])
+    print("Usage: %s" % sys.argv[0])

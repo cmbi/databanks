@@ -1,6 +1,5 @@
 import os
 import shutil
-import commands
 import tempfile
 from bz2 import BZ2File
 from threading import current_thread
@@ -73,10 +72,10 @@ class HbondsJob(Job):
                 logfilepath = os.path.join(tmpdir, logfilename)
                 out_path = os.path.join(out_dir, "%s.hb2.bz2" % self._pdbid)
 
-                with open(logfilepath, 'r') as g:
+                with open(logfilepath, 'rb') as g:
                     with BZ2File(out_path, 'wb') as f:
                         for line in g.readlines()[2:]:
-                            f.write(line.replace("->", "-"))
+                            f.write(line.decode('ascii').replace("->", "-").encode('ascii'))
             else:
                 _log.error("[hbonds] whatif timeout for %s" % self._pdbid)
         finally:

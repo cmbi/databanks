@@ -15,7 +15,7 @@ class _FakeQueue:
 
     def put(self, job, priority=0):
         with self._print_lock:
-            print job.get_name()
+            print(job.get_name())
 
 class _RunThread(Thread):
     def __init__(self, schedule_job):

@@ -1,5 +1,4 @@
 import os
-import commands
 from gzip import GzipFile
 from subprocess import Popen, PIPE
 
@@ -51,7 +50,7 @@ class PdbfinderDatJob(Job):
             p = Popen([MKPDBFINDER, '-H'],
                        stdout=f, stderr=PIPE, stdin=PIPE,
                        cwd="/srv/data/prog/pdbfinder")
-            p.stdin.write(self._pdbid.lower())
+            p.stdin.write(self._pdbid.lower().encode('ascii'))
             p.stdin.close()
             r = p.wait()
             if r != 0:
@@ -80,7 +79,7 @@ class PdbfinderJoinJob(Job):
 
         _log.debug("[pdbfinder] compressing %s" % out_file)
         with GzipFile(gz_file, 'wb') as g:
-            with open(out_file, 'r') as f:
+            with open(out_file, 'rb') as f:
                 while True:
                     chunk = f.read(1024)
                     if len(chunk) <= 0:

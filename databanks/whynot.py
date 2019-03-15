@@ -1,6 +1,6 @@
 import os
-from sets import Set
-from urllib2 import urlopen, HTTPError
+from urllib.request import urlopen
+from urllib.error import HTTPError
 
 from databanks.settings import settings
 from databanks.queue import Job
@@ -25,6 +25,6 @@ class WhynotCrawlJob(Job):
 
 def annotated_set(databank):
     try:
-        return Set(urlopen(URL + '/resources/list/%s_ANNOTATED' % databank).read().split())
+        return set(urlopen(URL + '/resources/list/%s_ANNOTATED' % databank).read().split())
     except HTTPError:
-        return Set()
+        return set()
