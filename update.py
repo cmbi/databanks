@@ -1,7 +1,7 @@
 import sys
 import os
+from filelock import FileLock
 
-from databanks.lock import FileLock
 from databanks.queue import Queue
 from databanks.whynot import WhynotCrawlJob
 from databanks.pdbredo import PdbredoCleanupJob
