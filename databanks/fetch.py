@@ -39,7 +39,7 @@ class FetchPdbredoJob(Job):
             excludes += " --exclude=\'%s\'" % pdbid
 
         log_command(_log, 'pdbredo',
-            "/usr/bin/rsync -av" +
+            "/usr/bin/rsync -av --delete" +
             " rsync://rsync.pdb-redo.eu/pdb-redo/" +
             " %s" % os.path.join(settings["DATADIR"], 'pdb_redo/'),
             timeout=24*60*60
