@@ -1,0 +1,3672 @@
+#!/usr/bin/env perl
+# -*-Perl-*-
+# $Id: mkpdbfinder,v 3.00 2000/05/31 15:42:46 elmar Exp $
+#############################################################################
+# reads in a file list from stdin and spits out a table with information about
+# each chain in the given pdbfiles.
+#############################################################################
+#
+# Usage:
+# src/mkpdblist | nohup nice src/mkpdbfinder > PDBFIND.TXT 2> pdbfinder.err &
+#
+# (C) 1994-1996 by Rob W.W. Hooft, Michael Scharf, Gert Vriend and Chris Sander
+#     Updated to V3.0 in May 2000,V3.1 in January 2001 by Elmar Krieger
+#
+# This file is freely redistributable, but only in unmodified form.
+# This copyright notice must be preserved on each copy. The latest
+# version of the resulting database should always be available by FTP from
+# ftp.embl-heidelberg.de. It is distributed as part of the WHAT IF
+# program. Proper acknowledgement is required.
+#
+#
+# Please note: The database version number is not a unique identification for
+#              the database, only for this script.
+#
+# v10.0:Apr 12, 2018 EK
+#       Modified the 'mmcif_first_revdate' subroutine.
+#       This fixes the problem that mmCIF files like 4V8S have date "?" in PDBFIND.TXT.
+#
+# v9.0: Sep 12, 2013 CB
+#       Added the 'read_mmcif' subroutine, which replaces 'read_pdb' if instead a mmCIF file must be parsed.
+#       This method executes the 'clean_protein' subroutine in the end, just like 'read_pdb' does.
+#
+# V8.0: Author field was suddenly truncated, fixed.
+#       Added options for new way of generating PDBFINDER (using separate files)
+#
+# V7.2: Cope with new nucleic acid names in the remediated PDB format: DA,DT,DG,DC 
+#
+# V7.1: Allow to print Het-IDs '0', do not print empty chains
+#
+# V5.1: Jun 9, 2005 EK
+#       Added the 'Alternates' field that counts the number of residues with alternate
+#       locations, i.e. another residue at the same spot. This help to identify errors
+#       like the one in 1GTV, where two alternate chain conformations are labeled
+#       chain 'A' and 'B', leading to many problems (incorrect DSSP assignment etc,
+#       partly biased WHAT_CHECKs etc).
+#
+# V4.1: Nov 16, 2004 EK
+#       The secondary structure content statistics now also consider unusual amino acids.
+#
+# V3.3: Oct 13, 2003 EK
+#       Date field now contains release date from first REVDAT entry instead of
+#       deposition date from HEADER field.
+#
+#       Dec 10, 2001 EK
+#       Found out that the script forgets the second in a pair of residues
+#       with the same number. Fixed.
+#
+#       Nov 27, 2001 EK
+#       Found out that the script forgets chains with identifier zero '0'
+#       like in 1pov. Fixed.
+#
+# V3.2: Jun 22, 2001 EK
+#       The chains are now written in the same sequence as in the PDB file
+#       for consistency with other programs. (e.g. A,B,D,C in 1HQ6)
+#
+# V3.1: Jan 10, 2001 EK
+#       Chain breaks are now additionally detected based on the length
+#       of the peptide bond (CA-CA didn't work for 1A7S,PRO 44)
+#
+# V3.0: May 29, 2000 EK                       
+#       Several changes made to ensure proper sequence extraction from PDB files
+#
+# V2.8: Jan 18, 1995 RWWH
+#       Two R-factor corrections. R-factor to 3 decimal places. Under CVS,
+#       so this will be the last log of this style.
+#
+# V2.7: Nov 7, 1995 RWWH
+#       First shot at parsing new-style SOURCE and COMPND records. Bug fix in
+#       HET parsing (recognizes one more nonsense string). Add expression
+#       system parsing also for older PDB files. Changes in R-factor parsing
+#       to allow for newer PDB files. Changes in Upper/Lowercase parsing.
+#
+# V2.6: Apr 6, 1995 RWWH
+#       Added interpretation of 'SEE REMARK #' in HET. Changed some warnings,
+#       tidying up STDERR a bit. Made reuse of overlay possible.
+#
+# V2.5: Mar 28th, 1995 RWWH
+#       Added 'Ref-Prog' field.
+#
+# V2.4: Feb 20th, 1995 RWWH
+#       Removed two lines from overlay (deleted entries). Introduced new
+#       method 'OTHER', and made all other methods use it.
+#
+# V2.3: Jan 17th, 1995 RWWH
+#       Detect overlapping residues, invalidating the second one.
+#       Detect and count chainbreaks. No longer warn if "_mod" files are used.
+#
+# V2.2: Sep 12th-Oct 5th, 1994 RWWH
+#       Renamed database to PDBFINDER. Add HET groups that are missing from
+#       PDB files. Add overlay possibility for HET names. Correct a bug
+#       in the interpretation of UNK residues. More security warnings. Removed
+#       E.C. from source if specified in Enzyme-Code field. Got more E.C.
+#       numbers out. Moved E.C. number to be subfield of Compound. Dates into
+#       overlay. Warn if E.C. code not standard. Do not apply overlay if 
+#       it does not match. Warn if "_mod" files are used.
+#
+# V2.1: Aug 31st, 1994 RWWH
+#       Make script more secure. Put "warn" commands in all places where
+#       things have once gone wrong. Add a few fields. Remove some bugs. 
+#       Removed "E.C." literal from enzyme code.
+#
+# V2.0: Script by Michael Scharf (July 5th, 1994)
+#       with Modifications marked "#RWWH" by Rob Hooft.
+#
+$gVERSION='v9.0 - 2013-09-12';
+
+# mmCIF parser:
+#use STAR::Parser;
+use IO::Uncompress::Gunzip qw(gunzip $GunzipError) ;
+use File::Basename;
+
+# Add some option handling
+use Getopt::Std;
+my %opts;
+getopts('HA:', \%opts);
+my $suppress_header = $opts{H};
+my $assemble_dir = $opts{A};
+
+# some global assocative arrays:
+
+# path list for mmCIF files
+@gMMCIFPATH=(".","/srv/data/mmCIF/");
+# list of possible mmCIF extensions
+@gMMCIFEXT=(".cif",".cif.gz");
+
+# path list for PDB files
+#@gPDBPATH=(".","/data/srs/pdb/","/elmar/pdb/","/data/pdb/","/mnt/dosc/yasara/pdb/");
+@gPDBPATH=(".","/srv/data/pdb/flat/");
+# list of possible PDB extensions
+@gPDBEXT=("",".brk",".brk_mod",".ent",".ent.gz",".pdb");
+@gPDBPREFIX=("","pdb");
+
+#path list for DSSP files
+@gDSSPPATH=(".","/srv/data/dssp/","/elmar/dssp/");
+# list of possible DSSP extensions
+@gDSSPEXT=("",".dssp",".dssp_pre",".dssp_mod",".dssp_pre_mod");
+
+#path list for HSSP files
+#@gHSSPPATH=(".","/data/hssp/","/elmar/hssp/");
+@gHSSPPATH=(".","/srv/data/hssp/");
+# list of possible HSSP extensions
+#@gHSSPEXT=("",".hssp",".hssp_pre",".hssp_mod",".hssp_pre_mod");
+@gHSSPEXT=(".hssp.bz2",".hssp");
+
+#path list for Structure Factor files
+@gSFPATH=(".","/srv/data/rcsb/structure_factors/divided/");
+# list of possible structure-factor extensions
+@gSFEXT=("sf.ent","sf.ent.gz");
+# list of possible structure-factor prefixes
+@gSFPREFIX=("r");
+
+# Where is the enzyme database?
+@ENZYMEPATH=("/srv/data/enzyme/enzyme.dat");
+
+$gHELIX='HGI'; # list of characters of DSSP summary colums. e.g 'HG' or 'H'
+$gBETA='BE';
+
+#
+# the following associations associate 3 letter code with one letter code
+#
+%G_STD_AMINO_ACID=(
+       "ALA",'A',
+       "ARG",'R',
+       "ASN",'N',
+       "ASP",'D',
+       "CYS",'C',              
+       "GLN",'Q',
+       "GLU",'E',
+       "GLY",'G',
+       "HIS",'H',
+       "ILE",'I',
+       "LEU",'L',
+       "LYS",'K',
+       "MET",'M',
+       "PHE",'F',
+       "PRO",'P',
+       "SER",'S',
+       "THR",'T',
+       "TRP",'W',
+       "TYR",'Y',
+       "VAL",'V'
+	);
+
+%G_IGNORE= (
+       "ACE",'?'
+	    );
+
+%G_AMINO_ACID=(
+	       %G_STD_AMINO_ACID,
+	       "ASX",'B', # for dssp
+	       "GLX",'Z', # for dssp
+	       "UNK",'X'
+	       );
+
+%G_WATER=(
+       "HOH",'w',
+       "H2O",'w',
+       "WAT",'w',
+       "DOD",'w'
+      );
+
+%G_NUCLEIC=(
+       "  A",'a',
+       " DA",'a',
+       " +A",'a',
+       "1MA",'a',
+       "  C",'c',
+       " DC",'c',
+       " +C",'c',
+       "5MC",'c',
+       "5NC",'c',
+       "OMC",'c',
+       "  G",'g',
+       " DG",'g',
+       " +G",'g',
+       "  I",'?',
+       "1MG",'g',
+       "2MG",'g',
+       "M2G",'g',
+       "7MG",'g',
+       "OMG",'g',
+       " YG",'g',
+       "  T",'t',
+       " DT",'t',
+       " +T",'t',
+       "  U",'u',
+       " +U",'u',
+       "H2U",'u',
+       "5MU",'u',
+       "PSU",'u',
+       "UKN",'?',
+       );
+
+%G_MONTH=(
+	  "JAN","01",
+	  "FEB","02",
+	  "MAR","03",
+	  "APR","04",
+	  "MAY","05",
+	  "JUN","06",
+	  "JUL","07",
+	  "AUG","08",
+	  "SEP","09",
+	  "OCT","10",
+	  "NOV","11",
+	  "DEC","12"
+	  );
+
+%G_MAX_MONTH=(
+	      "JAN",31,
+	      "FEB",29,
+	      "MAR",31,
+	      "APR",30,
+	      "MAY",31,
+	      "JUN",30,
+	      "JUL",31,
+	      "AUG",31,
+	      "SEP",30,
+	      "OCT",31,
+	      "NOV",30,
+	      "DEC",31
+	      );
+
+
+# List of known refinement programs.
+
+%known_programs = (
+'AMBER', 'AMBER',
+'AMORE', 'AMORE',
+'ARP', 'ARP',
+'ATOM', 'ATOM',
+'CALIBA', 'CALIBA',
+'CCP4', 'CCP4',
+'CEDAR', 'CEDAR',
+'CHARMM', 'CHARMM',
+'CNS', 'CNS',
+'CORELS', 'CORELS',
+'CORMA', 'CORMA',
+'CRLS', 'CRLS',
+'CRYLSQ', 'CRYLSQ',
+'DERIV', 'DERIV',
+'DGII', 'DGII',
+'DIAMOND', 'DIAMOND',
+'DIANA', 'DIANA',
+'DINOSAUR', 'DINOSAUR',
+'DISCOVER', 'DISCOVER',
+'DISGEO', 'DISGEO',
+'DISMAN', 'DISMAN',
+'DSPACE', 'DSPACE',
+'ECEPP', 'ECEPP',
+'EMBOSS', 'EMBOSS',
+'EREF', 'EREF',
+'FANTOM', 'FANTOM',
+'FREF', 'FREF',
+'FRODO', 'FRODO',
+'GENERATE', 'GENERATE',
+'GPRLSA', 'GPRLSA',
+'GRINCH', 'GRINCH',
+'GROMOS', 'GROMOS',
+'GROMOS-', 'GROMOS',
+'GROMOS-MDX', 'GROMOS-MDX',
+'HABAS', 'HABAS',
+'HAFFIX', 'HAFFIX',
+'HKSCAT', 'HKSCAT',
+'INSIGHTII', 'INSIGHTII',
+'IRMA', 'IRMA',
+'JACK-LEVITT', 'EREF',
+'LOOP', 'LOOP',
+'MANOSK', 'MANOSK',
+'MARDIGRAS', 'MARDIGRAS',
+'MIDGE', 'MIDGE',
+'MM', 'MM',
+'MODELFIT', 'MODELFIT',
+'MUMOD', 'MUMOD',
+'NCS', 'NCS',
+'NOEMOL', 'NOEMOL',
+'NUCLIN', 'NUCLIN',
+'NUCLIN-NUCLSQ', 'NUCLIN/NUCLSQ',
+'NUCLSQ', 'NUCLSQ',
+'OMIT', 'OMIT',
+'OPAL', 'OPAL',
+'PHENIX', 'PHENIX',
+'PIKSOL', 'PIKSOL',
+'PRESTO', 'PRESTO',
+'PROFFT', 'PROFFT',
+'PROLSQ', 'PROLSQ',
+'PROTEIN', 'PROTEIN',
+'PROTIN', 'PROTIN',
+'PSFRODO', 'PSFRODO',
+'QUANTA', 'QUANTA',
+'REFMAC', 'REFMAC',
+'RESLSQ', 'RESLSQ',
+'RESTRAIN', 'RESTRAIN',
+'ROTLSQ', 'ROTLSQ',
+'RSREF', 'RSREF',
+'SCATT', 'SCATT',
+'SFALL', 'SFALL',
+'SFRK', 'SFRK',
+'SHELX', 'SHELX',
+'SHELX-', 'SHELX',
+'SHELXL', 'SHELXL',
+'SHELXL-', 'SHELXL',
+'STEREOSEARCH', 'STEREOSEARCH',
+'STEROSEARCH', 'STEREOSEARCH',
+'TNT', 'TNT',
+'TOM', 'TOM',
+'ULTIMA', 'ULTIMA',
+'VEMBED', 'VEMBED',
+'XPLOR', 'X-PLOR',
+'X-PLOR', 'X-PLOR',
+'XEASY', 'XEASY',
+'YASAP', 'YASAP',
+'YASARA','YASARA',
+);
+
+
+# global to hold per chain compound information
+
+my $CH_CMP;
+
+# EK: print a warning message to mkpdbfinder.err
+# The old way of using warn to print to STDERR had to be removed due to
+# various problems with output redirection from Python scripts
+# (PDBFINDER is called from what_modelbase.py)
+sub warning {
+  open(LOG, ">>pdbfinder.err");
+  print LOG @_;
+  close(LOG);
+}
+
+# read the data from the __END__ lines
+sub init_overlay {
+    local($id,$oldval,$newval);
+    # read hand edited stuff from this file after the __END__  line...
+    while(<DATA>) {
+	chop;
+	next if ( /^\#/);
+	next if ( /^\s*$/);
+	die "Syntax error in overlay : $_" 
+	    unless /^([^ ]+) \"(([^\"\t]+)\t+)?([^\"\t]*)\"/;
+	$id=$1;
+	$oldval=$3;
+	$newval=$4;
+	#print "Debug: \"$id\" \"$oldval\" \"$newval\"\n";
+	$gOVERLAY{$id}=$newval;
+	$gEXPECT{$id}=$oldval;
+    }
+}
+
+sub init_enzyme {
+  local($ENZid,$file);
+  $enzyme_initialized++;
+  for $file (@ENZYMEPATH) {
+    if (-r $file) {
+      open(ENZ,"<$file") || die "Could not open enzyme data file\n";
+      while (<ENZ>) {
+	if (/^ID\s+(.*)$/) {
+	  $ENZid=$1;
+	} elsif (/^DE\s+DELETED ENTRY/) {
+	  $ENZ{$ENZid}="deleted" if $ENZid;
+	  $ENZid="";
+	} elsif (/^DE\s+TRANSFERRED ENTRY:\s+(.*)$/) {
+	  $ENZ{$ENZid}="transferred to $1" if $ENZid;
+	  $ENZid="";
+	} elsif (/^\/\//) {
+	  $ENZ{$ENZid}=1 if $ENZid;
+	}
+      }
+      close(ENZ);
+      return;
+    }
+  }
+}
+
+
+sub scan_enzyme {
+  local ($id)=@_;
+  if (!$enzyme_initialized) { &init_enzyme; }
+  if ($ENZ{$id}) {
+    if ($ENZ{$id}==1) {
+      return 0;
+    } else {
+      warning "$PID: Enzyme code check fails: $id $ENZ{$id}\n";
+      if ($ENZ{$id}=~/^T/) {
+	return 1;
+      } else {
+	return 2;
+      }
+    }
+  } elsif ($id=~/-$/) {
+    return 0; # Assume wild-card exists.
+  } else {
+    warning "$PID: Enzyme code check fails: Nonexisting $id\n";
+    return 3;
+  }
+}
+
+sub assemble_file
+{
+	my ($data_dir) = @_;
+
+	&print_head;
+
+	opendir(my $dh, $data_dir) or die "Could not open directory $data_dir: $!\n";
+	my @files = sort grep { -f "$data_dir/$_" } readdir($dh);
+	closedir($dh);
+
+	foreach my $file (@files) {
+		open(my $h, "<$data_dir/$file") or die "Could not read file $file: $!\n";
+		while (my $line = <$h>) { print $line; }
+		close($h);
+	}
+
+	&print_tail; 
+}
+
+#############################################################################
+# Main program
+{
+    local($file,$pdbfile,$mmciffile,$dsspfile,$hsspfile,$numfiles);
+
+	if (defined $assemble_dir) {
+		&assemble_file($assemble_dir);
+		exit;
+	}
+
+    &print_head unless $suppress_header;
+
+    &init_overlay();
+
+    # Process all files mentioned on input
+    while ($infiles=<>) {
+      @infiles=split(' ',$infiles);
+      foreach $file (@infiles) {
+		$numfiles++;
+
+		$file=~ tr/ \t\n//d; #get rid of any whitespace...
+
+		&clean_protein();
+
+		# get the brookhaven 4 letter code from the filename!
+		$id=&strip_extension(&strip_path($file));
+		$PID=$id;
+		$PID=~tr/a-z/A-Z/;
+
+		warning "PDB or mmCIF file not found for $file\n"
+			unless ( ($pdbfile=&find_file($file,*gPDBPATH,*gPDBEXT,*gPDBPREFIX)) or ($mmciffile=&find_file($file,*gMMCIFPATH,*gMMCIFEXT)) );
+		$PDB_FILE=&strip_path($pdbfile);
+		$MMCIF_FILE=&strip_path($mmciffile);
+		#warning "$PDB_FILE = $pdbfile" if ($pdbfile=~/_mod/);
+
+		$nodssp++
+		    unless ($dsspfile=&find_file($id,*gDSSPPATH,*gDSSPEXT));
+		$DSSP_FILE=&strip_path($dsspfile);
+		#warning "$DSSP_FILE = $dsspfile" if ($dsspfile=~/_mod/);
+	
+		$nohssp++
+		    unless ($hsspfile=&find_file($id,*gHSSPPATH,*gHSSPEXT));
+		$HSSP_FILE=&strip_path($hsspfile);
+		#warning "$HSSP_FILE = $hsspfile" if ($hsspfile=~/_mod/);
+	
+		$nosf++
+		    unless ($sffile=&find_file($id,*gSFPATH,*gSFEXT,*gSFPREFIX));
+		$HSSP_FILE=&strip_path($hsspfile);
+
+		&read_dssp($dsspfile)	if $dsspfile;
+		&read_hssp($hsspfile)	if $hsspfile;
+		&read_sf($sffile)	if $sffile;
+		if ($pdbfile)
+		{
+			&read_pdb($pdbfile);
+		}
+		elsif($mmciffile)
+		{
+			&read_mmcif($mmciffile);
+		}
+      }
+    }
+
+    &print_tail unless $suppress_header;
+    if ($METHOD=~/MODEL/) {
+	warning "Model $PID has not been renamed\n" unless ($pdbfile=~/_mod/);
+    } else {
+	warning "Non-Model $PID has been renamed to _mod\n" if ($pdbfile=~/_mod/);
+    }
+
+    #RWWH: Make sure there were no typos
+    if ($numfiles>5) {
+	foreach $f (sort keys %gOVERLAY) {
+	    warning "Unused overlay line : $f $gOVERLAY{$f}\n" unless $gOverUsed{$f};
+	}
+    }
+}
+
+#RWWH Header of the file
+sub print_head {
+    local($host,$date);
+    print "//PDBFINDER - $gVERSION\n";
+    if (open(H,'hostname|')) {
+	$host=<H>;
+	chop $host;
+	close(H);
+    }
+    if (open(D,'date|')) {
+	$date=<D>;
+	chop $date;
+	close(D);
+    }
+    print "//$date for $ENV{USER} on $host\n";
+
+    print "//\n";
+    print "// This file is PDBFIND.TXT\n";
+    print "//\n";
+    print "// Important change: Starting with 2003/10/13, the Date field contains the\n";
+    print "// release date (in PDB REVDAT 1) and not the deposition date (in PDB HEADER)\n";
+    print "//\n";
+    print "// (C) 1996-2003 by Rob W.W. Hooft, Chris Sander, Michael Scharf and\n";
+    print "//     Gert Vriend. Updated to V8.0 in Nov 2011 by M.L. Hekkelman\n";
+    print "//\n";
+    print "// This copyright notice must be preserved on each copy. The latest\n";
+    print "// version of this database should always be available by FTP from\n";
+    print "// ftp://ftp.cmbi.umcn.nl/pub/molbio/data/pdbfinder\n";
+	print "// It is distributed as part of the WHAT IF program. Proper acknowledgement\n";
+	print "// is required.\n";
+    print "//\n";
+}
+
+#RWWH Tail of the file
+sub print_tail {
+    local($date);
+    if (open(D,'date|')) {
+	$date=<D>;
+	chop $date;
+	close(D);
+    }
+    print "// Finished processing $date\n";
+}
+
+sub strip_path {
+    local($file)=@_;
+    # get rid of the path
+    $file=~ s/^.*\///;
+    $file;
+}
+
+sub strip_extension {
+    local($file)=@_;
+    # get rid of the extension
+    $file =~ s/pdb([0-9][0-9a-z]{3})\.ent/$1/i;
+    $file=~ s/\..*$//;
+    $file;
+}
+
+# searches a given name in some paths ...
+sub find_file {
+  local($name,*Path,*Ext,*inPrefix)=@_;
+  local($path,$ext,$fn);
+  
+  # maybe we got a full name?
+  if(-e $name) {
+    return $name;
+  }
+  if ($#inPrefix>=0) {
+    @Prefix=@inPrefix;
+  } else {
+    @Prefix=("");
+  }
+  # try all paths
+  foreach $path (@Path) {
+    # try all extensions
+    foreach $ext (@Ext) {
+      # try all prefixes
+      foreach $prefix (@Prefix) {
+		$fn="$path/$prefix$name$ext";
+		# does the file exist?
+        if (-e $fn) {
+	  		$fn =~ s,//,/,g; #globally substitute // by /
+	    	return $fn;
+		}
+		$fn="$path/".substr($name,1,2)."/$prefix$name$ext";
+		# does the file exist?
+		if (-e $fn) {
+			$fn =~ s,//,/,g; #globally substitute // by /
+	    	return $fn;
+		}
+      }
+    }
+  }
+  return "";
+}
+
+sub clean_dssp {
+
+  undef %DSSP_STRUC; # secondary structure indexed by resid
+  undef %DSSP_LINK1;   # bp1
+  undef %DSSP_LINK2;   # bp2
+  undef %DSSP_CIS;   # cysteins in DSSP
+}
+
+sub clean_sf {
+  undef $minh;
+  undef $mink;
+  undef $minl;
+  undef $maxh;
+  undef $maxk;
+  undef $maxl;
+  undef $nrefl;
+  undef $sftype;
+}
+
+sub clean_hssp {
+    undef $HSSP_NALIGN; #  Total number of alignments
+    undef %SWISSID;
+}
+
+sub clean_protein {
+    undef $PID;	       # 4 letter code of this protein
+    undef @COMPND;     # holds the COMPND record
+    undef $CH_CMP;     # holds per chain COMPND info (MLH)
+    undef @SOURCE;     # holds the SOURCE record
+    undef $EXPSYS;     # Holds the expression system
+    undef @AUTHOR;     # holds the Authors
+    undef @ECODES;     # Enzyme Code (EC...)
+    undef @HEADER;     # holds the HEADER record
+    undef $DATE;       # originally held the DATE from the HEADER, but now the relase date from REVDAT
+    undef $PDB_FILE;   # holds filename.extension but no path!
+    undef $MMCIF_FILE; # holds filename.extension but no path!
+    undef $DSSP_FILE;  # holds filename.extension but no path!
+    undef $HSSP_FILE;  # holds filename.extension but no path!
+    undef $RESOLUTION; # resolution in Angstrom; extracted from REMARK records
+    undef $PROGRAM;    # Refinement programs separated by "/"
+    undef $NMODELS;    # Number of NMR Models
+    undef $R_FACTOR;   # R-factor (0..1); extracted from REMARK records
+    undef $FREE_R;     # Free R-factor
+    undef $METHOD;     # can become  [X|NMR|MODEL|ED]
+    undef @CHAINS;     # an array with all its chain id's
+
+    undef @REMARK;     # all remarks indexed by remark number
+
+    #RWWH Added interpretation of HET records.
+    undef $N_HET;      # Number of HET groups.
+    undef @HET_CODE;   # HET code, indexed by HET number
+    undef @HET_NAME;   # HET name, indexed by HET number
+    undef @HET_NATOM;  # Number of atoms in HET group, indexed by HET number
+    undef @HET_ID;     # ID of hetgroup
+    undef @HET_CHAIN;  # Chain of HET
+    undef %HET_REVERSE;# HET number corresponding to ID. 
+
+    #----------------------------------------------------------------------
+    #
+    # Items with information about each chain indexed by $CHAIN (1 character)
+    #
+    undef %CHAINS;      # how often each chain occurs
+    undef %N_AMINO_ACIDS;	# Number of residues of ANY type
+    undef %N_NUCLEIC;	# Number of nucleic residues
+    undef %N_WATER;	# Number of water molecules
+    undef %N_SUBSTRATE;	# Number of other residues
+    undef %N_STD_AA;	# the 20 aa's. Only ATOM records are considered.
+    undef %N_NONSTD_AA;	# things with a backbone in ATOM or HETATM lines
+    undef %N_BACKBONE;  #  residues which contain the following 4 atoms:
+                        # ' N  ', ' CA ', ' C  ', ' O  '
+    undef %N_SIDECHAIN;	# residues with a backbone with at least
+			# one sidechain atom.
+			# GLY are per definition complete (they count here)!
+    undef %N_CA;        # stdandard AA's where only the ' CA ' atom is present
+    undef %N_UNK;	# aa residues called UNK in ATOM lines
+    undef %N_GLY; 	# number of GLY residues
+    undef %N_ALA;       # number of ALA residues
+
+    undef %N_SEC_STRUC; # number of AA with DSSP defined sec structure
+    undef %N_HELIX;     # number of AA in DSSP helix ($gHELIX)
+    undef %N_A_HELIX;   # number of AA in DSSP alpha helix H
+    undef %N_G_HELIX;   # number of AA in DSSP g Helix
+    undef %N_I_HELIX;   # number of AA in DSSP I Helix
+    undef %N_BETA;      # number of AA in DSSP beta ($gBETA)
+    undef %N_B_BETA;    # number of AA in DSSP B beta 
+    undef %N_E_BETA;    # number of AA in DSSP E beta 
+    undef %N_PAR_HB;    # number of h-bonds parallel in DSSP
+    undef %N_ANT_HB;    # number of h-bonds anti parallel in DSSP
+
+    undef %N_CYSS;      # cysteins involved in SS-bond
+
+    undef %SEQUENCE;    # non standard AA's are X unknowns are U
+		        # Nucleic sequences are lowercase!
+    undef $ignorechainflag;# EK: Do not add a chain to output
+    #---------------------------------------------------------------------
+    &clean_dssp;
+    &clean_hssp;
+    &clean_sf;
+    &clean_chain;
+    &clean_residue;
+}
+
+sub clean_chain {
+  undef $CH_N_AMINO_ACIDS;
+  undef $CH_N_SUBSTRATE;
+  undef $CH_N_WATER;
+  undef $CH_N_NUCLEIC;
+  undef $CH_N_STD_AA;
+  undef $CH_N_NONSTD_AA;
+  undef $CH_N_BACKBONE;
+  undef $CH_N_SIDECHAIN;
+  undef $CH_N_CA;
+  undef $CH_N_UNK;
+  undef $CH_N_GLY;
+  undef $CH_N_ALA;
+  undef $CH_N_SEC_STRUC;
+  undef %CH_SEC_STRUC;
+  undef $CH_N_HELIX;
+  undef $CH_N_BETA;
+  undef $CH_N_PAR_HB;
+  undef $CH_N_ANT_HB;
+  undef $CH_N_CYSS;
+  undef $CH_SEQUENCE;
+  $CHAIN="None";	# the current chain id, undef cannot be used
+  undef $CHAINBREAK;
+}
+
+sub clean_residue {
+  # counts of different atoms for the current residue:
+  # clean all atom counts for this residue
+  $N_N=0;
+  $N_CA=0;
+  $N_C=0;
+  $N_O=0;
+  $N_OXT=0;
+  $N_OTHER=0;
+  $N_ATOM=0;   # number of atoms in ATOM lines  
+  $N_HETATM=0; # number of atoms in HETATM lines
+  $DNA_BBFLAGS=0; # remember which DNA backbone atoms have been found
+  undef $RESIDUE_ID;  # identifier of current residue
+  undef $RESIDUE;     # 3 letter code of the currend residue
+  undef $CHAINBREAKFLAG; # EK: This flag is set if there is a chain break before the residue
+}
+
+sub extract_general_info {
+  &extract_resolution(@REMARK[2]);
+  &extract_rfactor(@REMARK[3]);
+  &extract_freer(@REMARK[3]);
+  $PROGRAM=&extract_program(@REMARK[3]);
+  # MUST BE AFTER rfactor and resolution !!!!
+  &extract_method(@REMARK[4] . @REMARK[5]);
+  # apply overlay...
+  $METHOD    =&get_overlay($PID,'MET',$METHOD);
+  # 
+  # R-factors for NMR are impossible to handle. All different
+  #
+  if ($METHOD eq 'NMR') {
+    undef $RESOLUTION;
+    undef $R_FACTOR;
+    undef $FREE_R;
+  }
+  #
+  # Overlay for R and Resolution.
+  #
+  $R_FACTOR  =&get_overlay($PID,'RFA',$R_FACTOR);
+  $RESOLUTION=&get_overlay($PID,'RES',$RESOLUTION);
+}
+
+sub extract_resolution {
+  local($line)=@_;
+  local(@resolutions);
+
+  # iterate over the remark line and take each potential candidate
+  while ($line =~ /RESOLUTION[.]?\s*([0-9+.\/]+)\s*ANGSTROM/) {
+    if ($1 == 0.0) {
+      warning "Zero resolution in $PID\n";
+    } else {
+      push(@resolutions,$1);
+    }
+    $line=$';		# take the rest as next search string
+    if(@resolutions) {
+      $RESOLUTION=join("/",@resolutions);
+    }
+  }
+}
+
+sub extract_rfactor {
+    local($remark)=@_;
+    local(@rfactors,$context,$prev,$foll,$match);
+    # iterate over the remark line and take each number as potential candidate
+    while($remark =~ /\b\d*\.?\d+/){
+      $remark=$';		# take the rest as next search string
+      $context.=$`;		# save the stuff before the number as context
+      $prev=$context;		# the stuff before the number
+      $match=$&;
+      $context.=$&;		# add the match to the context
+      #print STDERR substr($prev,length($prev)-70)."\n\n";
+      if($prev =~ /(FREE\s*)?\bR
+	           (\s*-?\s*(VALUE|FACTOR))?
+	           (\s*\(WORKING\s\+\sTEST\sSET,\sNO\sCUTOFF\))?
+	           (\s*\((WITH|NO)\sSIGMA\sCUTOFF\))?
+	           (\s*\(WORKING\sSET\))?
+	           (\s*\(WORKING\s\+\sTEST\sSET\))?
+	           (\s*\(F\>4SIG\(F\)\))?
+	           (\s*\(NO\sCUTOFF\))?
+	           (\s*\(WORKING\sSET,\sNO\sCUTOFF\))?
+	           (\s*(IS|OF|LESS)[\sA-Z]*)?
+	           (\s*:)?
+	           \s*$/x
+	             ||$prev =~ /\bR\s*=\s*$/ ) {
+	next if (length($1)>0);
+	# numbers > 1 will be divided by 100!
+	if($match>1) {
+	  $match=sprintf("%.3f",$match/100);
+	}
+	# collect all potential candidates..
+	#print STDERR substr($prev,length($prev)-70)." ====> $match\n";
+	push(@rfactors,$match);
+      }
+    }
+    if(@rfactors) {
+      $R_FACTOR=join("/",@rfactors);
+    }
+    #print "$R_FACTOR\n";
+}
+
+sub extract_freer {
+  local($remark)=@_;
+  local(@freer,$context,$prev,$foll,$match);
+  # iterate over the remark line and take each number as potential candidate
+  while($remark =~ /\b\d*\.?\d+/){
+    $remark=$';		# take the rest as next search string
+    $context.=$`;		# save the stuff befor the number as context
+    $prev=$context;		# the stuff befor the number
+    $match=$&;
+    $context.=$&;		# add the match to the context
+    #print STDERR substr($prev,length($prev)-70)."\n";
+    if($prev =~ /\bFREE\sR
+                  (\s*-?\s*(VALUE|FACTOR))
+                  (\s*\((WITH|NO)\sSIGMA\sCUTOFF\))?
+                  (\s*\(WORKING\sSET\))?
+                  (\s*\(F\>4SIG\(F\)\))?
+                  (\s*\(NO\sCUTOFF\))?
+                  (\s*\(WORKING\sSET,\sNO\sCUTOFF\))?
+                  (\s*:)?
+                  \s+$/x) {
+      # collect all potential candidates..
+      #print STDERR substr($prev,length($prev)-70)." ====> $match\n";
+      push(@freer,$match);
+    }
+    if(@freer) {
+      $FREE_R=join("/",@freer);
+    }
+  }
+}
+
+sub extract_program {
+  local($r)=@_;
+  local($program,$collect,$newcollect);
+  $r=~s/\s+/ /g;
+  $r=~s/INSIGHT II/INSIGHTII/g;
+  $collect="";
+  for (;;) {
+    $program="";
+    if ($r=~/PROGRAM\s+:\s+([-A-Z]+)/) {
+      $program=$1;
+      $r=~s/PROGRAM\s+:\s+//;
+    } elsif ($r=~/PROGRAM 1 ([-A-Z]+)/) {
+      $program=$1;
+      $r=~s/PROGRAM 1//g; # only one program from these lines...
+    } elsif ($r=~/PROGRAM 2 ([-A-Z]+)/) {
+      $program=$1;
+      $r=~s/PROGRAM 2//g;
+    } elsif ($r=~/PROGRAM 3 ([-A-Z]+)/) {
+      $program=$1;
+      $r=~s/PROGRAM 3//g;
+    } elsif ($r=~/PROGRAM 4 ([-A-Z]+)/) {
+      $program=$1;
+      $r=~s/PROGRAM 4//g;
+    } elsif ($r=~s/PROGRAMS [\*\"\']?([A-Z]+)[\*\"\']? AND [\*\"\']?([A-Z]+)//) {
+      $program="$1/$2";
+    } elsif ($r=~s/(PROGRAMS?|PACKAGE) [\*\"\']?([^ \d\*\(\)\";\,\.\']+)//) {
+      $program=$2;
+    } elsif ($r=~s/\(?\*([-A-Z]+)\*\)?//) {
+      $program=$1;
+    } elsif ($r=~s/\(\"([-A-Z]+)\"\)//) {
+      $program=$1;
+    } elsif ($r=~s/THE [\"\*]?([^ \*\(\)\,\"]+)[\"\*]? (PRO(GRAM|CEDURE)|PACKAGE)//) {
+      $program=$1;
+    } elsif ($r=~s/USING \*?([-A-Z]+)\*?//) {
+      $program=$1;
+    } elsif ($r=~s/JACK.*LEVITT//) {
+      $program='EREF';
+    } elsif ($r=~s/BRUNGER// && !$program=~/CNS/) {
+      $program='X-PLOR';
+    } elsif ($r=~s/DIAMOND// && $r=~s/REAL[- ]SPACE//) {
+      $program='DIAMOND';
+    } elsif ($r=~s/KONNERT// && $r=~s/HENDRICKSON//) {
+      if ($r=~/NUCLEIC/) {
+	      $program='NUCLSQ';
+      } else {
+	      $program='PROLSQ';
+      }
+    } elsif ($r=~s/USING \*?([-A-Z]+)\*?//) {
+      $program=$1;
+    }
+    last unless ($program);
+    if ($program=~/LSQ$/) {
+      $r=~s/KONNERT//g; # Prevent the other ones from appearing too...
+    }
+    $collect.="/$program" if index($collect,$program)<$[;
+    $program=~s/(\W)/\\\1/g;
+  }
+  $collect=~s/^\///;
+  #print "Collected : $collect\n";
+  if ($collect) {
+    $newcollect="";
+    foreach $program (split('/',$collect)) {
+      if (defined $known_programs{$program}) {
+	$newcollect.="/$known_programs{$program}"
+	  if index($newcollect,$known_programs{$program})<$[;
+      }
+    }
+    $newcollect=~s/^\///;
+    return $newcollect;
+  } elsif ($r=~/REFINEMENT\.? NONE/) {
+    return "NONE";
+  } else {
+    return "";
+  }
+}
+
+
+sub extract_method {
+    local($line)=@_;
+    local($wasnot)=0;
+    unless ($METHOD) { #might have been defined in a EXPDTA line
+	$wasnot=1;
+	if($RESOLUTION || $R_FACTOR) {
+	    # What else can it be if there is resolution or rfactor?
+	    $METHOD='X-RAY';
+	} elsif ($line =~ /NMR/) {
+	    # If they use the word NMR and don't give a resolution 
+	    # or rfactor nor put a EXPDTA line then I think it's a 
+	    # NMR-structure ;-)
+	    $METHOD='NMR';
+	}
+#RWWH New rule: If we don't know, it's a model.....
+        unless ($METHOD) {
+	    $METHOD='MODEL';
+	}
+    }
+    # make the output more compact!
+    if($METHOD =~/NMR/) {
+	$METHOD='NMR';
+    } elsif ($METHOD =~/X-RAY/) {
+	$METHOD='X';
+    } elsif ($METHOD =~/SYNCHROTRON RADIATION/) {
+	$METHOD='X';
+    } elsif ($METHOD =~/MODEL/) {
+	$METHOD='MODEL';
+    } elsif ($METHOD =~/NEUTRON DIFFRACTION/) {
+	$METHOD='NEUTRON';
+    } elsif ($METHOD =~/ELECTRON DIFFRACTION/) {
+	$METHOD='OTHER';
+    } elsif ($METHOD =~/FIBER DIFFRACTION/) {
+	$METHOD='FIBER';
+    } elsif ($METHOD =~/FLUORESCENCE TRANSFER/) {
+	$METHOD='OTHER';
+    } else {
+	warning "Unknown method $METHOD for $PID\n";
+	$METHOD='OTHER';
+    }
+    if ($METHOD eq 'X' && $wasnot) {
+	warning "NMR mentioned in X-structure $PID\n" if ($line=~/NMR/);
+    }
+}
+
+sub extract_ecode {
+    local($txt)=@_;
+    while(1) {
+	$standard=($txt =~ /\(E\.C\.[-\d]+\.[-\d]+\.[-\d]+\.[-\d]+\)/i);
+        if ($txt =~ s/Ec:\s+([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)\,/Ec: /i) {
+	    $ecode=$1;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)<2;
+        } elsif ($txt =~ s/Ec:\s+([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)\;//i) {
+	    $ecode=$1;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)<2;
+	} elsif ($txt =~ s/\((E\.C\.|Ec) ?([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)\.?\)//i) {
+	    $ecode=$2;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)<2;
+	    warning "$PID: non-standard enzyme code\n" unless $standard;
+	} elsif ($txt =~ s/, (E\.C\.|Ec) ?([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)//i) {
+	    $ecode=$2;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)<2;
+            warning "$PID: non-standard enzyme code\n"
+	} elsif ($txt =~ s/<(E\.C\.|Ec) ?([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)//i) {
+	    $ecode=$2;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)<2;
+            warning "$PID: non-standard enzyme code\n"
+	} elsif ($txt =~ s/<EC: ([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)//i) {
+	    $ecode=$1;
+	    $ecode=~s/ //;
+	    push(@ECODES,$ecode) if &scan_enzyme($ecode)>1;
+	} elsif ($txt =~ /([-\d]+\.[-\d]+\.[-\d]+\.[-\d]+)/) {
+	    warning "In $PID: is $1 an enzyme code?\n" if &scan_enzyme($ecode)<2;
+	    last;
+	} elsif ($txt =~ /([-\d]+\.[-\d]+\.[-\d]+)/) {
+	    warning "In $PID: is $1 an incomplete enzyme code?\n";
+	    last;
+	} else {
+	    last;
+	}
+    }
+    $txt=~s/  / /g;
+    $txt=~s/ +$//;
+    $txt=~s/^ +//;
+    $txt;
+}
+
+sub get_overlay {
+    local($pid,$what,$orig)=@_;
+    local($temp);
+    # print "Getting overlay..... @_\n";
+    # build up the key
+    $pid=~tr/A-Z/a-z/;
+    local($id)="$pid:$what";
+    if(defined $gOVERLAY{$id} ) {
+	unless ($orig eq $gEXPECT{$id}) {
+	    warning "Overlay warning $id: Expected \"$gEXPECT{$id}\" but got \"$orig\"";
+	    return $orig;
+	}
+	if($gOVERLAY{$id} ne $orig ) {
+	    # ok, we will replace it
+	    warning "-----overlay($pid,$what) '$orig' -> '$gOVERLAY{$id}'\n";
+	    $temp=$gOVERLAY{$id};
+	    $gOverUsed{$id}++;
+	    return $temp;
+	}
+        if ($orig) {
+	    warning "-----overlay($pid,$what) '$orig' identical.\n";
+	    $gOverUsed{$id}++;
+	}
+    }
+    return $orig;
+}
+
+#############################################################################
+
+sub print_begin {
+  local($currid)=@_;
+  $PRINT_CURRID=$currid;
+  &print_string("ID",$currid);
+}
+
+sub print_int {
+  local($label,$num)=@_;
+  if ($num) { # Don't print ZEROS!!
+    &print_string($label,sprintf("%d",$num+0));
+  }
+}
+
+sub print_float {
+  local($label,$num,$format)=@_;
+  $format="%4.2f" unless $format;
+  if ($num) { # Don't print ZEROS!!
+    &print_string($label,sprintf("$format",$num+0));
+  }
+}
+
+sub print_string {
+  local($label,$text)=@_;
+  #Reduce indentation.
+  $label=~s/  / /g;
+  # Strip trailing whitespace
+  $text =~ s/\s+$//;
+  if ( $text ne "" ) { # don't print empty lines!!
+    printf("%-13s: %s\n",$label,$text);
+  }
+}
+
+sub print_text {
+  local($label,$text)=@_;
+  &print_string($label,$text);
+}
+
+sub print_lines {
+  local($label,*list)=@_;
+  foreach $i (@list) {
+    &print_string($label,$i);
+  }
+}
+
+sub print_list {
+  local($label,*list)=@_;
+  foreach $i (@list) {
+    &print_string($label,$i);
+  }
+}
+
+sub print_sequence {
+  local($label,$seq)=@_;
+  foreach $s (split("\n",$seq)){
+    &print_string($label,$s);
+  }
+}
+
+sub print_end {
+    print "//\n";
+}
+
+sub cleanup_compound {
+    
+    local (@chains, $info, @cmpnd);
+    
+    @COMPND = split(m/;\s*/, join(" ", @COMPND));
+
+    foreach my $COMPND (@COMPND) {
+
+	my ($key, $value) = split(m/:\s*/, $COMPND);
+	
+	$key =~ s/ +$//;
+	$key =~ s/^ +//;
+	$key = uc($key);
+	
+	$value =~ s/^\s+//;
+	$value =~ s/\s*;$//;
+	
+	if ($key eq 'MOL_ID') {
+	    my %info_holder = ();
+	    $info = \%info_holder;
+	    @chains = undef;
+	}
+	elsif ($key eq 'CHAIN') {
+	    @chains = split(m/,\s*/, $value);
+
+	    die "No chains defined" unless scalar(@chains);
+	    die "No info defined" unless defined $info;
+	
+	    if (not defined $CH_CMP) {
+		my %CH_CMP = ();
+		$CH_CMP = \%CH_CMP;
+	    }
+
+	    foreach my $chain (@chains) {
+		$CH_CMP->{uc($chain)} = $info;
+	    }
+	}
+	elsif ($key eq 'EC') {
+	    push @ECODES, $value;
+	    $info->{'EC'} = $value;
+	}
+	elsif ($key eq 'MUTATION') {
+	    if (not ($value =~ m/\s+Wild\s+Type\s*/i)) {
+	    	$line = 'Mutant';
+	    	$info->{'MUTANT'} = 1;
+		push @cmpnd, 'Mutant';
+	    }
+	}
+	elsif ($key eq 'SYNONYM' or $key eq 'SYNONYMS') {
+	    push @cmpnd, "($value)";
+	    
+	    $value = $info->{'SYNONYM'} . ", $value" if defined $info->{'SYNONYM'};
+	    $info->{'SYNONYM'} = $value;
+	}
+	elsif ($key eq 'MOLECULE') {
+	    push @cmpnd, $value;
+	    $info->{'MOLECULE'} = $value;
+	}
+	elsif ($key ne 'DOMAIN' and $key ne 'ENGINEERED' and $key ne 'HETEROGEN' and $key ne 'OTHER_DETAILS') {
+	    $value = 1 unless defined $value;
+	    $info->{lc($key)} = $value;
+	    
+	    push @cmpnd, $line;
+	}
+    }
+
+    @COMPND = @cmpnd;
+}
+
+sub cleanup_source {
+  local ($SOURCE);
+  $SOURCE=join(' ',@SOURCE);
+  $SOURCE=~s/\s+$//;
+  #
+  # Add a semicolon to the end if there is none
+  #
+  $SOURCE.=";" unless $SOURCE=~/\;$/;
+  #
+  # Remove subfields that are not of interest for PDBFINDER
+  #
+  $SOURCE=~s/(Plasmid|
+	      Other_details|
+	      Cell_line|
+	      Cell|
+	      Molecule|
+	      Expression_system_gene|
+	      Expression_system_plasmid|
+	      Expression_system_strain|
+	      Cellular_location|
+	      Mol_id|
+	      Organ|
+	      Strain|
+	      Synthetic|
+	      Variant|
+	      Gene|
+	      Tissue)\:[^\;]*\;//ixg;
+  #
+  # Make organism old-fashioned for the newer files.
+  #
+  $SOURCE=~s/Organism_scientific:\s+([^\;]*)\;/\n\($1\)\n/ig;
+  $SOURCE=~s/Organism_common:([^\;]*)\;/\n$1\n/ig;
+  $SOURCE=~s/Organism:([^\;]*)\;/\n$1\n/ig;
+  #
+  # Modern, intermediate and old-fashioned ways to specify the
+  # expression system
+  #
+  if ($SOURCE=~/Expression_system:\s*([^\;]*)\;/i) {
+    $EXPSYS=$1;
+    $SOURCE=~s/Expression_system:\s*([^\;]*)\;//ig;
+  } elsif ($SOURCE=~s/(Recombinant\s(Form|Protein)\s|
+                       Synthetic\sGene\sConstruct\s|
+                       And\s)?
+                       (over)?Expressed\sIn\s
+                       ([^.;\)]*\)?)//ix) {
+    $EXPSYS=$4;
+  } elsif ($SOURCE=~s/Expression System: ([^.;,]*)\;?//i) {
+    $EXPSYS=$1;
+  } else {
+    $EXPSYS="";
+  }
+  if ($EXPSYS=/^escherichia coli$/i) {
+    $EXPSYS="(escherichia coli)";
+  }
+  $SOURCE=~s/^\s+//;
+  $SOURCE=~s/\;$//g;
+  $SOURCE=~s/\\\:/\:/g;
+  @SOURCE=split('\n\s*',$SOURCE);
+}
+
+#############################################################################
+sub print_general {
+    &print_lines("Header",*HEADER);
+    if ($DATE) {
+      &print_text	("  Date",$DATE);
+    } else {
+      warning("No deposition date for structure $PID\n")
+    }
+    &cleanup_compound;
+    &print_lines("Compound",*COMPND);
+    &print_list ("  Enzyme-Code",*ECODES);
+    &cleanup_source;
+    &print_lines("Source",*SOURCE);
+    &print_text (" Expr-Sys",$EXPSYS) if ($EXPSYS);
+    &print_list("Author",*AUTHOR);
+    &print_text ("Exp-Method",$METHOD);
+    if ($RESOLUTION) {
+	&print_float("  Resolution",$RESOLUTION);
+    } else {
+	warning "No resolution for structure $PID\n" if ($METHOD eq 'X');
+    }
+    if ($R_FACTOR && $R_FACTOR!=9.99) {
+      &print_float("  R-Factor",$R_FACTOR,"%5.3f");
+      &print_float("   Free-R",$FREE_R,"%5.3f") if $FREE_R;
+    } elsif (!$R_FACTOR) {
+      warning "No R-factor for structure $PID\n" if ($METHOD eq 'X');
+    }
+    &print_sf;
+    &print_int  ("  N-Models",$NMODELS);
+    &print_text ("Ref-Prog",$PROGRAM);
+    &print_int  ("HSSP-N-Align",$HSSP_NALIGN);
+#    &print_text ("PDB-FILE",$PDB_FILE);
+#    &print_text ("DSSP-FILE",$DSSP_FILE);
+}
+
+
+sub print_sf {
+  if ($nrefl>0) {
+    &print_string ("  SF-Type",$sftype);
+    &print_int    ("    N-refl",$nrefl);
+    &print_int    ("    H-min",$minh);
+    &print_int    ("    H-max",$maxh);
+    &print_int    ("    K-min",$mink);
+    &print_int    ("    K-max",$maxk);
+    &print_int    ("    L-min",$minl);
+    &print_int    ("    L-max",$maxl);
+  }
+}
+
+sub print_hets {
+    &print_int("HET-Groups",$N_HET);
+    for ($i=1;$i<=$N_HET;$i++) {
+	&print_text ("  Het-Id",$HET_ID[$i]);
+	&print_text ("    Chain-Id",$HET_CHAIN[$i]);
+	&print_int  ("    Natom",$HET_NATOM[$i]);
+	#&print_text ("    Code",$HET_CODE[$i]);
+  $HET_NAME[$i]=~s/ +$//;
+	$HET_NAME[$i]=~s/^\s*//;
+	$HET_NAME[$i]=&get_overlay($PID,"HET$HET_ID[$i]",$HET_NAME[$i]);
+	if (length($HET_NAME[$i])) {
+	  &print_text ("    Name",$HET_NAME[$i]);
+	} else {
+	  warning "Empty HETNAM for $HET_CODE[$i] in $PID\n";
+	}
+    }
+}
+
+#RWWH Total contents.
+sub print_total_over_chains {
+    local($tot,$tothel,$totstr,$totdna,$totprot,$totwat,$totnonstd,%chains_seen);
+    foreach $chain (@CHAINS) {
+	$chid="$CHAINS{$chain}\t$N_SUBSTRATE{$chain}\t$SEQUENCE{$chain}";
+	next if $chains_seen{$chid};
+	$chains_seen{$chid}++;
+	$tot+=$N_SEC_STRUC{$chain};
+	$tothel+=$N_HELIX{$chain};
+	$totstr+=$N_BETA{$chain};
+	$totdna+=$N_NUCLEIC{$chain};
+	$totprot+=$N_AMINO_ACIDS{$chain};
+	$totwat+=$N_WATER{$chain};
+	$totnonstd+=$N_NONSTD_AA{$chain};
+    }
+    if ($tot) {
+	&print_float("T-Frac-Helix",$tothel/$tot);
+	&print_float("T-Frac-Beta",$totstr/$tot);
+    }
+    &print_int("T-Nres-Nucl",$totdna);
+    &print_int("T-Nres-Prot",$totprot);
+    &print_int("  T-non-Std",$totnonstd);
+
+
+  # EK: FIND THE TOTAL NUMBER OF RESIDUES WITH ALTERNATE LOCATIONS
+  $totalternates=0;
+  for ($i=1;$i<=$#cenxlist;$i++)
+  { # ONLY CHECK LAST 2000 RESIDUES, OTHERWISE IT GETS TOO SLOW
+    $first=$i-2000;
+    if ($first<0) { $first=0; }
+    for ($j=$first;$j<$i;$j++)
+    { $d2=(($cenxlist[$j]-$cenxlist[$i])**2+
+           ($cenylist[$j]-$cenylist[$i])**2+
+           ($cenzlist[$j]-$cenzlist[$i])**2);
+      if ($d2<4) { $totalternates+=2; } } }
+    
+  &print_int("T-Alternates",$totalternates);
+  
+    &print_int("T-Water-Mols",$totwat);
+
+}
+
+use Data::Dumper;
+
+sub print_chain {
+    local($chain)=@_;
+    local($naa)=$N_STD_AA{$chain}+$N_NONSTD_AA{$chain};
+    &print_text	("Chain",$CHAINS{$chain});
+    &print_text ("  Ch-Compnd", $CH_CMP->{$CHAINS{$chain}}->{'MOLECULE'});
+    &print_text ("    Ch-Synonym", $CH_CMP->{$CHAINS{$chain}}->{'SYNONYM'});
+    &print_text ("    Ch-EnzCode", $CH_CMP->{$CHAINS{$chain}}->{'EC'});
+    
+    foreach my $key (keys %{$CH_CMP->{$CHAINS{$chain}}}) {
+    	next if ($key eq 'MOLECULE') or ($key eq 'EC') or ($key eq 'SYNONYM');
+    	
+    	if ($key eq 'MUTANT') {
+    	    &print_text ("    Ch-Other", 'Mutant');
+    	}
+    	else {
+	    &print_text ("    Ch-Other", "$key: " . $CH_CMP->{$CHAINS{$chain}}->{$key});
+    	}
+    }
+    
+    &print_int	("  Sec-Struc",$N_SEC_STRUC{$chain});
+    &print_int	("    Helix",$N_HELIX{$chain});
+#    &print_int	("      A-Helix",$N_A_HELIX{$chain});
+    &print_int	("      i,i+3",$N_G_HELIX{$chain});
+    &print_int	("      i,i+5",$N_I_HELIX{$chain});
+    &print_int	("    Beta",$N_BETA{$chain});
+#    &print_int	("      E-Beta",$N_E_BETA{$chain});
+    &print_int	("      B-Bridge",$N_B_BETA{$chain});
+    &print_int	("      Para-Hb",$N_PAR_HB{$chain});
+    &print_int	("      Anti-Hb",$N_ANT_HB{$chain});
+    &print_int	("  Amino-Acids",$N_AMINO_ACIDS{$chain});
+#    &print_int	("    Std",$N_STD_AA{$chain});
+    &print_int	("    non-Std",$N_NONSTD_AA{$chain});
+    &print_int	("    Miss-BB",$naa-$N_BACKBONE{$chain});
+    &print_int	("    Miss-SC",$naa-$N_SIDECHAIN{$chain});
+    &print_int	("    only-Ca",$N_CA{$chain});
+    &print_int	("    UNK",$N_UNK{$chain});
+    &print_int	("    CYSS",$N_CYSS{$chain});
+    &print_int  ("    Break",$CHAINBREAK{$chain});
+    &print_int	("  Nucl-Acids",$N_NUCLEIC{$chain});
+    &print_int	("  Substrate",$N_SUBSTRATE{$chain});
+    &print_int	("  Water-Mols",$N_WATER{$chain});
+#    &print_int	("  GLY",$N_GLY{$chain});
+#    &print_int	("  ALA",$N_ALA{$chain});
+#    &print_int	("  Seq-Length",length($SEQUENCE{$chain}));
+    &print_sequence("  Sequence",$SEQUENCE{$chain});
+}
+
+sub store_protein {
+    &extract_general_info;
+
+    local($chain,$currid,%chid,%chains_seen);
+    &print_begin($PID);
+    &print_general();
+    
+#RWWH print structure totals
+    &print_total_over_chains();
+
+#RWWH print the list of HET groups.
+    if ($N_HET) {
+	&print_hets();
+    }
+
+    # iterate over all chains in this protein.
+    foreach $chain (@CHAINS) {
+	$chid="$CHAINS{$chain}\t$N_SUBSTRATE{$chain}\t$SEQUENCE{$chain}";
+
+  # EK: The following line is bad, because there are PDB files with multiple times the same chain (see 1CT9)
+  # next if $chains_seen{$chid};
+	$chains_seen{$chid}++;
+	# here you can decide if a chain is supposed to be written out
+#	next unless (   $N_AMINO_ACIDS{$chain}
+#		     || $N_NUCLEIC{$chain}
+#		     || $N_WATER{$chain}
+#		     || $N_SUBSTRATE{$chain}
+#		     );
+	#warning "Printing chain '$chain'\n";
+	&print_chain($chain);
+    }
+    &print_end();
+    &clean_protein;
+}
+
+sub push_line 
+{
+    local(*list,$line)=@_;
+    $line=~ s/\n/ /g;
+    $line=~ s/\s\s+/ /g;
+    $line=~ s/^\s+//;
+    $line=~ s/\s+$//;
+    push(@list,$line);
+}
+
+sub store_chain {
+    local($chain)=@_;
+    # EK: Ignore all chains that are not part of the first model
+    # (In 100% of the cases (June 2000) considering chains from follow-up
+    # models messed up the PDBFINDER entry due to various sorts of problems.
+    # See for example 1CLD,1MSH,1QLK,1ZNF,2ZNF,3ACE,4ACE)
+    if ($ignorechainflag||$chain eq 'None') {
+      &clean_chain;
+      return;
+    }
+    # EK: Ignore chains that do not contain anything at all. Example: the single incorrect atom 3649 in 1cm4 
+    if (!$CH_N_AMINO_ACIDS&&!$CH_N_SUBSTRATE&&!$CH_N_WATER&&!$CH_N_NUCLEIC) { return; }
+    
+    # if no $chain defined don't do anything
+    #return unless ($chain);
+    #warning "Store of chain '$chain'\n";
+    $chain='_' if $chain eq ' ';
+
+    $chain_id =$#CHAINS+2;
+
+    $CHAINS{$chain_id}=$chain;
+    push(@CHAINS,$chain_id);
+
+    $N_AMINO_ACIDS{$chain_id}=$CH_N_AMINO_ACIDS;
+    $N_SUBSTRATE{$chain_id}=$CH_N_SUBSTRATE;
+    $N_WATER{$chain_id}=$CH_N_WATER;
+    $N_NUCLEIC{$chain_id}=$CH_N_NUCLEIC;
+    $N_STD_AA{$chain_id}=$CH_N_STD_AA;
+    $N_NONSTD_AA{$chain_id}=$CH_N_NONSTD_AA;
+    $N_BACKBONE{$chain_id}=$CH_N_BACKBONE;
+    $N_SIDECHAIN{$chain_id}=$CH_N_SIDECHAIN;
+    $N_CA{$chain_id}=$CH_N_CA;
+    $N_UNK{$chain_id}=$CH_N_UNK;
+    $N_GLY{$chain_id}=$CH_N_GLY;
+
+    $N_SEC_STRUC{$chain_id}=$CH_N_SEC_STRUC;
+    $N_HELIX{$chain_id}=$CH_N_HELIX;
+    $N_BETA{$chain_id}=$CH_N_BETA;
+    $N_PAR_HB{$chain_id}=$CH_N_PAR_HB;
+    $N_ANT_HB{$chain_id}=$CH_N_ANT_HB;
+    $N_B_BETA{$chain_id}=$CH_SEC_STRUC{"B"};
+    $N_E_BETA{$chain_id}=$CH_SEC_STRUC{"E"};
+    $N_A_HELIX{$chain_id}=$CH_SEC_STRUC{"H"};
+    $N_G_HELIX{$chain_id}=$CH_SEC_STRUC{"G"};
+    $N_I_HELIX{$chain_id}=$CH_SEC_STRUC{"I"};
+    $CHAINBREAK{$chain_id}=$CHAINBREAK;
+
+    $N_CYSS{$chain_id}=$CH_N_CYSS;
+    $SEQUENCE{$chain_id}=$CH_SEQUENCE;
+
+    &clean_chain;
+
+    return $chain_id;
+}
+
+sub store_residue {
+  local($residue, $chain)=@_;
+  # if no $residue defined don't do anything
+  return unless $residue;
+  # Don't do anything if the residue was found to be invalid
+  # EK: This means a value of 2 now (0=valid, 1=we do not know, 2=invalid)
+  if ($res_invalid==2) {
+    &clean_residue;
+    return;
+  }
+
+  local($has_backbone,
+	$has_sidechain,
+	$typefound,		# >0 if not unknown
+	$resid);		# used to lookup the dssp sec struc
+  local($residue1);		# holds the 1 letter code
+
+  # that's quite tough.... how do we find out the type of residue
+  # first let's see if it's an UNKnown residue (this name is used both for
+  # amino acids and dna bases).
+  if ($residue eq "UNK" && $DNA_BBFLAGS==63) {
+    # if a DNA backbone is present, we are sure it's a base (see 4DPV)
+    # rename from UNK to UKN (UnKnownNucleotide)
+    $residue="UKN";
+  }
+  # can we find this residuetype in one of the standard
+  # residue sets?
+  if (defined $G_AMINO_ACID{$residue}) {
+    # it's an amino acid
+    # EK: However, it can still be just a strange sidechain mutant without backbone
+    # (see e.g. 1ejg,ILE 25)
+    if ($N_CA) {
+      # EK: At least a CA atom must be present
+      $residue1= $G_AMINO_ACID{$residue};
+      $CH_N_AMINO_ACIDS++;
+    }
+    $typefound++;
+  } elsif (defined $G_NUCLEIC{$residue}) {
+    $CH_N_NUCLEIC++;
+    $typefound++;
+    #build DNA SEQUENCE...
+    # get the 1 letter code
+    $CH_SEQUENCE.=$G_NUCLEIC{$residue};
+  }elsif(defined $G_WATER{$residue}) {
+    $CH_N_WATER++;
+    $typefound++;
+  }elsif(defined $G_IGNORE{$residue}) {
+    # ignore it - don't put it into any bin
+    $typefound++;
+  }
+  
+  if($N_N && $N_CA && $N_C && $N_O) {
+    # residue has backbone!
+    $has_backbone++;
+    $CH_N_BACKBONE++;
+    # EK: Chain breaks are now detected based on the CA-CA and C-N distances
+    if (defined $CHAINBREAKFLAG) { $CHAINBREAK++; }
+
+    if(!$typefound) {
+      # this is a non standard amino acid - at least it has a backbone
+      $CH_N_AMINO_ACIDS++;
+      $typefound++;
+    }
+    if($N_OTHER>0 || $residue eq 'GLY'){
+      # only for things that have backbone it makes sense to see
+      # if it has sidechain
+      $CH_N_SIDECHAIN++ ;
+    }
+  } elsif ($N_ATOM==1 && $N_HETATM ==0 && $N_CA && $residue1) {
+    # this is a C-alpha only of a standard amino acid
+    $CH_N_CA++;
+    # EK: Chain breaks are now detected based on the CA-CA distance
+    if (defined $CHAINBREAKFLAG) { $CHAINBREAK++; }
+
+  }
+  
+  if (!$typefound) {
+    # ok, let's assume this is a SUBSTRATE residue...
+    $CH_N_SUBSTRATE+=$N_ATOM+$N_HETATM;
+    if ($N_ATOM) {
+      warning "Substrate $RESIDUE $RESIDUE_ID in $PID has $N_ATOM ATOM cards (and $N_HETATM HETATM)\n";
+    }
+    local($R)=$RESIDUE;
+    local($RI)=$RESIDUE_ID;
+    $R=~s/ //g;
+    $RI=~s/ //g;
+    if ($HET_REVERSE{$RI}) {
+      if ($HET_ID[$HET_REVERSE{$RI}] ne $RI) {
+	warning "HET_ID mismatch in $R($RI) of $PID:\n";
+	warning "$HET_ID[$HET_REVERSE{$RI}] ne $RI\n";
+      }
+    } else {
+      warning "Substrate $R($RI) in $PID not in HET\n";
+      #warning keys %HET_REVERSE;
+      #warning "\n";
+      $N_HET=$N_HET+1;
+      $HET_REVERSE{$RI}=$N_HET;
+      $HET_ID[$N_HET]=$RI;
+      $HET_ID[$N_HET]=~s/ //g;
+      $HET_CHAIN[$N_HET] = $chain;
+      $HET_NATOM[$N_HET]=$N_ATOM+$N_HETATM;
+      $HET_NAME[$N_HET]=$R;
+    }
+  }
+  # let's build up the AMINO ACID sequence if one letter code is known
+  if($residue1) {
+    $CH_SEQUENCE.=$residue1;
+    $CH_N_STD_AA++;
+  } elsif($has_backbone) {
+    $CH_SEQUENCE.='X';
+    $CH_N_NONSTD_AA++;
+  }
+
+  # count special residues
+  if($residue eq 'GLY') {
+    $CH_N_GLY++;
+  } elsif ($residue eq 'ALA') {
+    $CH_N_ALA++;
+  } elsif ($residue eq 'UNK') {
+    $CH_N_UNK++;
+  }
+
+  # deal with DSSP information...
+  $resid="$RESIDUE_ID-$CHAIN-";
+  if (defined $G_AMINO_ACID{$residue}) {
+    $resid=$resid.$G_AMINO_ACID{$residue};
+  } else {
+    $resid=$resid."X";
+  }
+
+  if(defined $DSSP_STRUC{$resid}) {
+
+    $CH_N_SEC_STRUC++;
+    # does it match the helix pattern?
+    if($DSSP_STRUC{$resid} =~ /[$gHELIX]/o ) {
+      $CH_N_HELIX++;
+    }
+    # does it match the beta pattern?
+    if($DSSP_STRUC{$resid} =~ /[$gBETA]/o ) {
+      $CH_N_BETA++;
+    }
+    $CH_SEC_STRUC{$DSSP_STRUC{$resid}}++;
+  }
+  if(defined $DSSP_CIS{$resid}) {
+    $CH_N_CYSS++;
+  }
+  if ($l=$DSSP_LINK1{$resid}) {
+    if ($l=~/[a-z]/) {
+      $CH_N_PAR_HB++;
+    } else {
+      $CH_N_ANT_HB++;
+    }
+  }
+  if ($l=$DSSP_LINK2{$resid}) {
+    if ($l=~/[a-z]/) {
+      $CH_N_PAR_HB++;
+    } else {
+      $CH_N_ANT_HB++;
+    }
+  }
+  
+  &clean_residue;
+}
+
+sub mmcif_valid_columnvalue
+{
+        my $value = $_[0];
+
+        return (($value ne '?') and ($value ne '.') and (defined $value));
+}
+
+sub filter_mmcif_defined_column_values
+{
+	my @a = @_;
+	my @r=();
+	foreach $element (@a)
+	{
+		next unless ( &mmcif_valid_columnvalue($element) );
+		push @r , $element;
+	}
+	return @r;
+}
+
+sub read_entity_tables_mmcif
+{
+	my $data = $_[0];
+
+	my %entities=();
+	my $entities=\%entities;
+
+	# First the entity category:
+        foreach my $row (@{$data->{'_entity'}})
+        {
+                my $id = $row->{'id'} ;
+		my $entity = {};
+		$entities->{ $id } = $entity;
+		$entity->{'id'} = $id;
+
+		$entity->{'type'}	= $row->{'type'};
+                $entity->{'desc'}	= $row->{'pdbx_description'}	if defined $row->{'pdbx_description'} and &mmcif_valid_columnvalue( $row->{'pdbx_description'} );
+		$entity->{'ec'}		= $row->{'pdbx_ec'}		if defined $row->{'pdbx_ec'} and &mmcif_valid_columnvalue( $row->{'pdbx_ec'} );
+                $entity->{'mutation'}	= $row->{'pdbx_mutation'}	if defined $row->{'pdbx_mutation'} and &mmcif_valid_columnvalue( $row->{'pdbx_mutation'} );
+		$entity->{'fragment'}   = $row->{'pdbx_fragment'}	if defined $row->{'pdbx_fragment'} and &mmcif_valid_columnvalue( $row->{'pdbx_fragment'} );
+                $entity->{'details'}	= $row->{'details'}		if defined $row->{'details'} and &mmcif_valid_columnvalue( $row->{'details'} );
+	}
+
+        # Next the entity_name_com category:
+	if (defined $data->{'_entity_name_com'})
+	{
+		#for(my $i=0; $i<$nentities; $i++ )
+		foreach my $row (@{$data->{'_entity_name_com'}})
+		{
+			my $id = $row->{'entity_id'} ;
+			my $entity = $entities->{ $id };
+
+			$entity->{'name'} = $row->{'name'} if defined $row->{'name'} and &mmcif_valid_columnvalue( $row->{'name'} );
+        	}
+	}
+
+        # Next the entity_poly category:
+	foreach my $row (@{$data->{'_entity_poly'}})
+        { # These rows will only be present for entities of type polymer:
+
+		my $id = $row->{'entity_id'} ;
+		my $entity = $entities->{ $id };
+
+		$entity->{'polytype'} = $row->{'type'} ;
+		$entity->{'chains'} = (split /,/, $row->{'pdbx_strand_id'});
+        }
+
+	# CB: we need to define criteria to determine whether an entity is engineered or not!
+
+	return $entities;
+}
+
+sub print_mmcif_entity_compound
+{
+	my $entity = $_[0];
+
+	if( $entity->{'type'} eq 'polymer' and $entity->{'polytype'} =~ m/[(peptide)(nucleotide)]/i  )
+	{
+		if (defined $entity->{ 'desc' })
+		{
+			if ( $entity->{'polytype'} =~ m/peptide/i ) { &print_string("Compound", $entity->{ 'desc' } ); }
+			else { &print_string("Compound", $entity->{ 'desc' } ); }
+		}
+
+		&print_string("Compound", " engineered: yes") if ( $entity->{ 'engineered' });
+
+		&print_string("Compound", '('.$entity->{ 'name' }.')' ) if (defined $entity->{ 'name' });
+
+		&print_string("Compound", "Mutant" ) if (defined $entity->{ 'mutation' });
+
+		&print_string("  Enzyme-Code",$entity->{ 'ec' } ) if (defined $entity->{ 'ec' }) ;
+	}
+}
+
+sub mmcif_sort_chain_ids
+{
+	my @chain_ids = @_;
+
+	return sort (@chain_ids);
+
+#	my @digits=grep (/^[0-9]$/,@chain_ids);
+#	my @letters=grep (/^[A-Za-z]$/,@chain_ids);
+#	my @words=grep (/^[A-Za-z0-9]+$/,@chain_ids);
+
+#	return ( (sort @letters) , (sort @digits), (sort @words) );
+}
+
+sub altlocHasPriority
+{
+	my ($this, $other) = @_;
+
+	return 0 if $this  eq ' ' or $this	eq '.';
+	return 1 if $other eq ' ' or $other eq '.';
+
+	# Altloc A has priority over B, alphabetical has priority over digit.
+
+	my ($thisisletter,$otherisletter) = ($this =~ /[A-Z][a-z]/,$other =~ /[A-Z][a-z]/);
+
+	return ( $thisisletter and not $otherisletter or $thisisletter eq $otherisletter and $this le $other );
+}
+
+sub read_mmcif_atoms
+{
+	my $data = $_[0];
+
+	my $sorted_atoms = {}; # access like this: entity id -> chain -> residue id -> atom name -> atom index
+	my $residue_order = {}; # acces like this: entity id -> chain -> ordered residue ids
+	my $residue_altlocs = {}; # access like this: entity id -> chain -> residue id -> priority altloc
+
+	my %chain_to_authchain = ();
+	my %atoms_per_model = (); # access like this: model id -> n atoms
+	my $firstmodel=0;
+
+	# Create lookup dictionaries for chemical components:
+        my %chemcomp_name_lookup = ();
+	my %chemcomp_isnonstandard=();
+	foreach my $row (@{$data->{'_chem_comp'}})
+        {
+		$chemcomp_name_lookup{ $row->{'id'} } = $row->{'name'};
+                #$chemcomp_name_lookup{ $chemcomp_ids [ $chemcomp_i ] } = $chemcomp_names [ $chemcomp_i ] ;
+
+		$chemcomp_isnonstandard{ $row->{'id'} } = ( lc $row->{'mon_nstd_flag'} ne 'y' );
+                #$chemcomp_isnonstandard{ $chemcomp_ids [ $chemcomp_i ] } = ( lc $chemcomp_nstd [ $chemcomp_i ] ne 'y' );
+        }
+
+	# Atom record data from the mmCIF file:
+	# Sort the atoms by entity, chain and residue
+	foreach my $row (@{$data->{'_atom_site'}})
+        {
+		my($model,$resnum,$ins_code) = ( $row->{'pdbx_PDB_model_num'},$row->{'auth_seq_id'},$row->{'pdbx_PDB_ins_code'});
+
+		$firstmodel = $model unless $firstmodel ;
+		$atoms_per_model{ $model } = 0 if( not defined $atoms_per_model{ $model } );
+		$atoms_per_model{ $model } ++;
+
+		#ignore atoms from all other models
+		next if ( $model ne $firstmodel ) ;
+
+		# CB: mkpdbfinder identifies residues by matching their representative strings exactly.
+                #     So spaces need to be added to residue ids, as they are placed in identifiers by read_dssp, read_hssp, read_pdb, etc.
+                if($ins_code eq '?') {
+                        $residue_id=(sprintf "%4s", $resnum) . ' ';
+                } else {
+                        $residue_id=(sprintf "%4s", $resnum) . $ins_code;
+                }
+
+		my($type,$atom,$altloc,$residue,$chain,$authchain,$entity_id) = (	$row->{'group_PDB'},
+									$row->{'label_atom_id'},
+									$row->{'label_alt_id'},
+									$row->{'auth_comp_id'},
+									$row->{'label_asym_id'},
+									$row->{'auth_asym_id'},
+									$row->{'label_entity_id'} );
+
+        $chain_to_authchain{$chain} = $authchain;
+
+		if (not defined $sorted_atoms->{ $entity_id } )
+		{
+			$sorted_atoms->{ $entity_id } = {};
+		}
+		if (not defined $residue_order->{ $entity_id } )
+                {
+                        $residue_order->{ $entity_id } = {};
+                }
+		if (not defined $sorted_atoms->{ $entity_id }->{ $chain } )
+		{
+			$sorted_atoms->{ $entity_id }->{ $chain } = {};
+		}
+		if (not defined $residue_order->{ $entity_id }->{ $chain } )
+                {
+                        $residue_order->{ $entity_id }->{ $chain } = [];
+                }
+		if (not defined $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } )
+		{
+			push @{ $residue_order->{ $entity_id }->{ $chain } }, $residue_id;
+
+			$sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } = {};
+		}
+
+		if (not defined $residue_altlocs->{ $entity_id })
+		{
+			$residue_altlocs->{ $entity_id } = {}
+		}
+		if (not defined $residue_altlocs->{ $entity_id }->{ $chain })
+		{
+			$residue_altlocs->{ $entity_id }->{ $chain }={}
+		}
+
+		# Only allow 1 alternative location identifier per residue. Altloc A has priority over B, alphabetical has priority over digit.
+		if ( defined $residue_altlocs->{ $entity_id }->{ $chain }->{ $residue_id } )
+		{
+			my $otheraltloc = $residue_altlocs->{ $entity_id }->{ $chain }->{ $residue_id };
+			if( &altlocHasPriority( $altloc, $otheraltloc ) )
+			{
+				$sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id }->{ $atom } = $row;
+
+				# Delete what was previously stored and has a different altloc:
+				foreach my $otheratom (keys %{ $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } })
+				{
+					my $otheratomrow=$sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id }->{ $otheratom };
+					if( $otheratomrow->{'label_alt_id'} ne $altloc )
+					{
+						delete $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id }->{ $otheratom };
+					}
+				}
+
+				$residue_altlocs->{ $entity_id }->{ $chain }->{ $residue_id } = $altloc;
+			} elsif ($altloc eq $otheraltloc) {
+
+				$sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id }->{ $atom } = $row;
+			}
+		}
+		else
+		{
+			$sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id }->{ $atom } = $row;
+
+			$residue_altlocs->{ $entity_id }->{ $chain }->{ $residue_id } = $altloc;
+		}
+	}
+
+	return ( $sorted_atoms, $residue_order, (scalar (keys %atoms_per_model)), %chain_to_authchain );
+}
+
+sub mmcif_store_residues_chains
+{
+	my $data = $_[0];
+	my $sorted_atoms = $_[1];
+	my $residue_order= $_[2];
+
+	@cenxlist=();
+        @cenylist=();
+        @cenzlist=();
+
+        # Atom record data from the mmCIF file:
+	# This remembers which chains in CHAINS belong to which entity
+	my $entities_chain_indices={};
+
+	# Now iterate over all chains and residues we found
+	foreach my $entity_id (sort {$a <=> $b}  (keys %{ $sorted_atoms } ) )
+	{
+		$entities_chain_indices->{ $entity_id } = [];
+
+		foreach my $chain (&mmcif_sort_chain_ids( keys %{ $sorted_atoms->{ $entity_id } } ) )
+		{
+			$CHAIN=$chain;
+			my ($highres_id,$prevresidue_id) = ('','');
+
+			foreach my $residue_id ( @{ $residue_order->{ $entity_id }->{ $chain } } )
+			{
+				$RESIDUE_ID=$residue_id;
+
+				# EK: Values of res_invalid: 0=valid, 1=we do not not yet, 2=invalid
+				$res_invalid=1;
+
+				my $residue_nhetatm=0;
+
+				my($residue,$resnum,$ins_code);
+				$RESIDUE='';
+
+				foreach my $atomrow (values %{ $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } } )
+				{
+					my ($type,$atom,$altloc) = ($atomrow->{'group_PDB'},$atomrow->{'label_atom_id'},$atomrow->{'label_alt_id'});
+#($atomtypes[$i_atom],$atomnames[$i_atom],$atomaltlocs[$i_atom]);
+
+					($residue,$resnum,$ins_code) = ($atomrow->{'auth_comp_id'},$atomrow->{'auth_seq_id'},$atomrow->{'pdbx_PDB_ins_code'});
+#( $atomresnames[$i_atom],$atomresnums[$i_atom],$atominsertioncodes[$i_atom] );
+
+					# CB: whitespaces must be added to residue symbol to let it have string length 3.
+					# Otherwise the 'store_residue' subroutine wouldn't understand!
+					if   ( (length $residue) eq 1) { $residue='  '.$residue; }
+					elsif( (length $residue) eq 2) { $residue=' ' .$residue; }
+
+					my ($x,$y,$z) = ($atomrow->{'Cartn_x'},$atomrow->{'Cartn_y'},$atomrow->{'Cartn_z'});
+#( $atomxs[$i_atom], $atomys[$i_atom], $atomzs[$i_atom] );
+
+					$RESIDUE=$residue;
+
+					if( $type eq 'HETATM' or $chemcomp_isnonstandard{ $residue } )
+					{
+						$N_HETATM++;
+
+						$residue_nhetatm++;
+					}
+					elsif( $type eq 'ATOM' )
+					{
+						$N_ATOM++;
+					}
+
+					if($atom eq 'N')
+					{
+						$N_N++;
+
+						if ( $prevresidue_id and defined $sorted_atoms->{ $entity_id }->{ $chain }->{ $prevresidue_id }->{ 'C' } ) # previous residue had an atom named 'C'
+						{
+							my $prevc_atomrow = $sorted_atoms->{ $entity_id }->{ $chain }->{ $prevresidue_id }->{ 'C' };
+
+							($cx,$cy,$cz)=( $prevc_atomrow->{'Cartn_x'},$prevc_atomrow->{'Cartn_y'},$prevc_atomrow->{'Cartn_z'} );
+							($nx,$ny,$nz)=($x,$y,$z);
+
+							$d=sqrt(($cx-$nx)**2+($cy-$ny)**2+($cz-$nz)**2);
+
+							if ($d>2.5) { $CHAINBREAKFLAG=1; }
+						}
+					}
+					elsif($atom eq 'CA')
+					{
+						($cax,$cay,$caz)=($x,$y,$z);
+
+						($caxlist[$CH_N_AMINO_ACIDS],$caylist[$CH_N_AMINO_ACIDS],$cazlist[$CH_N_AMINO_ACIDS])=($cax,$cay,$caz);
+
+						push @cenxlist,$cax;
+						push @cenylist,$cay;
+						push @cenzlist,$caz;
+
+						# EK: check CA distance to previous one unless it's the first residue
+						if ($CH_N_AMINO_ACIDS)
+						{
+							my $overlapchk;
+
+							if ( $altloc eq '.' and $ins_code eq '?' )
+							{
+								# EK: alternate location and insertion code fields are empty. To gain
+								# speed, we need to check just the last residue for overlaps and breaks
+								$overlapchk=$CH_N_AMINO_ACIDS-1;
+							}
+							else
+							{
+								# EK: if they are not empty, we must check every preceding CA atom in
+								# the chain (some wise guys put all the overlapping residues at the
+								# end of the PDB file, see 1AQM).
+								$overlapchk=0;
+							}
+
+							# EK: check CA distances
+							while ($overlapchk<$CH_N_AMINO_ACIDS)
+                                                	{
+                                                       		$d=sqrt( ($cax-$caxlist[$overlapchk])**2+($cay-$caylist[$overlapchk])**2+($caz-$cazlist[$overlapchk])**2 );
+
+                                                       		# EK: if the distance is smaller than 1A, and if the residue id
+                                                       		#     is lower than or equal to the largest previous one (ignoring
+                                                       		#     the insertion code), we skip the residue
+                                                       		if ($d<1.0 && substr($residue_id,0,4) le substr($highres_id,0,4))
+                                                       		{
+                                                       		        if ($res_invalid) { $res_invalid=2; }
+                                                       		        last;
+                                                       		}
+                                                       		$overlapchk++;
+                                                	}
+
+                                                	# Bump found? If no, residue is valid (CA without bump)
+                                                	if ($d>=1.0) { $res_invalid=0; }
+
+                                                	# was the last CA-CA distance too large?
+                                                	if ($d>4.5) { $CHAINBREAKFLAG=1; }
+						}
+
+						$N_CA++;
+					}
+					elsif($atom eq 'C')
+					{
+						$N_C++;
+
+						($cx,$cy,$cz)=($x,$y,$z)
+					}
+					elsif($atom eq 'O') { $N_O++; }
+					elsif($atom eq 'OXT' && $residue != 'IAS') { $N_OXT++; }
+					else
+			                {
+			                        $N_OTHER++;
+						# EK: check for DNA backbone
+						$DNA_BBFLAGS|=1  if ($atom eq "P");
+						$DNA_BBFLAGS|=2  if ($atom eq "O5*" || $atom eq "O5'");
+						$DNA_BBFLAGS|=4  if ($atom eq "C5*" || $atom eq "C5'");
+						$DNA_BBFLAGS|=8  if ($atom eq "C4*" || $atom eq "C4'");
+						$DNA_BBFLAGS|=16 if ($atom eq "C3*" || $atom eq "C3'");
+						$DNA_BBFLAGS|=32 if ($atom eq "O3*" || $atom eq "O3'");
+					}
+				}
+
+				if ( $residue_nhetatm>0 and not (grep m/^$residue$/, @HETIGNORE))
+				{ # This residue is a HET-group
+
+					$N_HET++;
+					$HET_CODE[$N_HET] = $residue;
+					$HET_ID[$N_HET] = $resnum;
+					$HET_CHAIN[$N_HET] = $chain;
+					$HET_NATOM[$N_HET] = scalar (keys %{ $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } } ) ;
+					
+					warning "Could not locate name for $residue in $PID\n" unless ( defined $chemcomp_name_lookup{ $residue } );
+
+					$HET_NAME[$N_HET] = $chemcomp_name_lookup{ $residue } ;
+					$HET_REVERSE{$HET_ID[$N_HET]}=$N_HET;
+				}
+
+				$N_OXTBAK=$N_OXT;
+
+				# remember the highest residue ID stored so far
+                                if ($RESIDUE_ID gt $highres_id) { $highres_id=$RESIDUE_ID; }
+
+				# Store residue and clear N_OXT etc.
+				&store_residue($RESIDUE,$CHAIN);
+
+				# Do we have to cut the chain after this residue?
+				if($N_OXTBAK)
+				{
+					my $storedchain_id = &store_chain($CHAIN);
+					push @{ $entities_chain_indices->{ $entity_id } }, $storedchain_id if ( $storedchain_id );
+
+					$highres_id="";
+					$prevresidue_id="";
+				}
+				else # No chain cut, so remember which residue came before the next one in chain
+				{
+					$prevresidue_id=$residue_id;
+				}
+			}
+
+			my $storedchain_id = &store_chain($CHAIN);
+			push @{ $entities_chain_indices->{ $entity_id } }, $storedchain_id if ( $storedchain_id );
+		}
+	}
+
+	return $entities_chain_indices;
+}
+
+sub print_mmcif_hetgroups
+{
+        my $data = $_[0];
+        my $sorted_atoms = $_[1];
+	my $residue_order = $_[2];
+
+	my @HETIGNORE=('HOH','H2O','DOD','D2O','WAT','MOH');
+
+        # Create lookup dictionaries for chemical components:
+        my %chemcomp_name_lookup = ();
+        my %chemcomp_isnonstandard=();
+	foreach my $row (@{$data->{'_chem_comp'}})
+        {
+                #$chemcomp_name_lookup{ $chemcomp_ids [ $chemcomp_i ] } = $chemcomp_names [ $chemcomp_i ] ;
+		$chemcomp_name_lookup{ $row->{'id'} } = $row->{'name'};
+                #$chemcomp_isnonstandard{ $chemcomp_ids [ $chemcomp_i ] } = ( lc $chemcomp_nstd [ $chemcomp_i ] ne 'y' );
+		$chemcomp_isnonstandard{ $row->{'id'} } = (lc $row->{'mon_nstd_flag'} ne 'y' );
+        }
+
+        # Atom record data from the mmCIF file:
+
+	my $n_het=0;
+	my @het_codes=();
+	my @het_ids=();
+	my @het_chains=();
+	my @het_natoms=();
+	my @het_names=();
+	my %het_reverse=();
+
+	foreach my $entity_id (sort {$a <=> $b} (keys %{ $sorted_atoms } ) )
+        {
+		foreach my $chain (&mmcif_sort_chain_ids( keys %{ $sorted_atoms->{ $entity_id } } ) )
+		{
+			foreach my $residue_id ( @{ $residue_order->{ $entity_id }->{ $chain } } )
+			{
+				my $residue_nhetatom=0;
+				my($residue,$resnum);
+
+				foreach my $atomrow (values %{ $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } } )
+				{
+                                        my $type = $atomrow->{'group_PDB'};
+					($residue,$resnum) = ($atomrow->{'auth_comp_id'},$atomrow->{'auth_seq_id'});
+
+                                        if( $type eq 'HETATM' or $chemcomp_isnonstandard{ $residue } )
+                                        {
+                                                $residue_nhetatom++;
+                                        }
+				}
+		
+	                        if ( $residue_nhetatom>0 and not (grep m/^$residue$/, @HETIGNORE))
+				{ # This residue is a HET-group
+
+					$n_het++;
+                        	        $het_codes[$n_het] = $residue;
+                        	        $het_ids[$n_het] = $resnum;
+                     			$het_chains[$n_het] = $chain;
+                	                $het_natoms[$n_het] = scalar (keys %{ $sorted_atoms->{ $entity_id }->{ $chain }->{ $residue_id } } ) ;
+
+        	                        warning "Could not locate name for $residue in $PID\n" unless ( defined $chemcomp_name_lookup{ $residue } );
+
+	                                $het_names[$n_het] = $chemcomp_name_lookup{ $residue } ;
+                                	$het_reverse{$het_ids[$n_het]}=$n_het;
+                        	}
+			}
+		}
+	}
+
+	&print_int("HET-Groups",$n_het);
+
+	for ($i=1;$i<=$n_het;$i++)
+	{
+		&print_text ("  Het-Id",$het_ids[$i]);
+		&print_text ("    Chain-Id",$het_chains[$i]);
+		&print_int  ("    Natom",$het_natoms[$i]);
+		$het_names[$i] =~ s/ +$//;
+		$het_names[$i] =~ s/^\s*//;
+		$het_names[$i] = &get_overlay($PID,"HET$het_names[$i]",$het_names[$i]);
+		if (length($het_names[$i])) {
+			&print_text ("    Name",$het_names[$i]);
+		} else {
+			warning "Empty HETNAM for $het_codes[$i] in $PID\n";
+		}
+	}
+}
+
+sub print_entity_chain
+{
+	local($entity, $chain, %chain_to_authchain)=@_;
+
+	local($naa)=$N_STD_AA{$chain}+$N_NONSTD_AA{$chain};
+	&print_text ("Chain", $CHAINS{$chain});
+	&print_text ("  Ch-Auth-ID", $chain_to_authchain{$CHAINS{$chain}});
+
+	if ($entity->{ 'desc' })
+	{
+		if( $entity->{'type'} eq 'polymer' and $entity->{'polytype'} =~ m/peptide/i )
+		{
+			&print_text ("  Ch-Compnd", ($entity->{ 'desc' }) ) ;
+		}
+		else
+		{
+			&print_text ("  Ch-Compnd", $entity->{ 'desc' } );
+		}
+	
+		&print_text ("    Ch-Synonym",	($entity->{ 'name' }) )	if ($entity->{ 'name' }) ;
+		&print_text ("    Ch-EnzCode", $entity->{ 'ec' }  );
+
+		foreach my $key (keys %{ $entity })
+		{
+			next if ($key eq 'type')
+				or ($key eq 'polytype')
+				or ($key eq 'chains')
+				or ($key eq 'desc')
+				or ($key eq 'ec')
+				or ($key eq 'name')
+				or ($key eq 'engineered')
+				or ($key eq 'details');
+
+			if ($key eq 'mutation') {
+				&print_text ("    Ch-Other", 'Mutant');
+			}
+			else
+			{
+				&print_text ("    Ch-Other", "$key: " . ($entity->{ $key }) );
+			}
+		}
+	}
+
+	&print_int  ("  Sec-Struc",$N_SEC_STRUC{$chain});
+	&print_int  ("    Helix",$N_HELIX{$chain});
+#	&print_int ("      A-Helix",$N_A_HELIX{$chain});
+	&print_int  ("      i,i+3",$N_G_HELIX{$chain});
+	&print_int  ("      i,i+5",$N_I_HELIX{$chain});
+	&print_int  ("    Beta",$N_BETA{$chain});
+#	&print_int ("      E-Beta",$N_E_BETA{$chain});
+	&print_int  ("      B-Bridge",$N_B_BETA{$chain});
+	&print_int  ("      Para-Hb",$N_PAR_HB{$chain});
+	&print_int  ("      Anti-Hb",$N_ANT_HB{$chain});
+	&print_int  ("  Amino-Acids",$N_AMINO_ACIDS{$chain});
+#	&print_int ("    Std",$N_STD_AA{$chain});
+	&print_int  ("    non-Std",$N_NONSTD_AA{$chain});
+	&print_int  ("    Miss-BB",$naa-$N_BACKBONE{$chain});
+	&print_int  ("    Miss-SC",$naa-$N_SIDECHAIN{$chain});
+	&print_int  ("    only-Ca",$N_CA{$chain});
+	&print_int  ("    UNK",$N_UNK{$chain});
+	&print_int  ("    CYSS",$N_CYSS{$chain});
+	&print_int  ("    Break",$CHAINBREAK{$chain});
+	&print_int  ("  Nucl-Acids",$N_NUCLEIC{$chain});
+	&print_int  ("  Substrate",$N_SUBSTRATE{$chain});
+	&print_int  ("  Water-Mols",$N_WATER{$chain});
+#	&print_int ("  GLY",$N_GLY{$chain});
+#	&print_int ("  ALA",$N_ALA{$chain});
+#	&print_int ("  Seq-Length",length($SEQUENCE{$chain}));
+	&print_sequence("  Sequence",$SEQUENCE{$chain});
+}
+
+sub unquote
+{
+	my $str = $_[0];
+
+	if ($str =~ m/^\"(.*)\"$/ ) {
+		$str =~ s/^\"(.*)\"$/$1/;
+	} elsif ($str =~ m/^\'(.*)\'$/ ) {
+		$str =~ s/^\'(.*)\'$/$1/;
+	}
+
+	return $str;
+}
+
+sub parse_values_line
+{
+        my $line = $_[0];
+
+        my @words=split /\s+/,$line;
+        my $nwords=scalar @words;
+
+        my @values=();
+        my $i=0;
+        while ($i<$nwords)
+        {
+                if ( $words[$i] =~ m/^[\'\"]/ ) # starts with a quote
+                {
+                        my $value = '';
+                        my $quote = substr $words[$i],0,1;
+
+                        until ( (length $value)>1 and (substr $value,-1) eq $quote ) # must end in the same quote
+                        {
+                                $value .= ' ' if $value;
+                                $value .= $words[$i];
+
+                                $i++;
+                        }
+
+                        push @values, &unquote ($value);
+                }
+                else
+                {
+                        push @values, $words[$i] if ((length $words[$i])>0);
+                        $i++;
+                }
+        }
+
+        return @values;
+}
+
+sub parse_mmcif
+{
+	# This subroutine converts the cif file to a multidimensional dictionary representation:
+	# categories->{ category id }->[ row index (0,1,2,3,4..) ]->{ variable name } = value
+
+	local($filename)=@_;
+
+	my $h;
+	if ($filename=~ m/\.(Z|gz)$/) {
+		open ($h,"gzip -dc $filename|");
+	} else {
+		open ($h,"<$filename");
+	}
+
+	my $categories={};
+	my ($catid,$loop)=('',0);
+	my @values=();
+	my @varids=();
+
+	while (my $line = <$h> )
+	{
+		chomp $line;
+
+		if ($line =~ m/^(data_|#)/)
+		{
+			my ($nvar,$nval)=(scalar @varids,scalar @values);
+                        if ($nval>0 and $nval<$nvar)
+                        {
+                                my $val='[' . (join ',',@values) . ']';
+                                die "Too few values (length of $val < $nvar) parsed for $catid\n";
+                        }
+
+                        $loop=0;
+			(@values,@varids)=((),());
+		}
+		elsif ($line =~ m/^loop_$/ )
+		{
+			$loop=1;
+		}
+		elsif ($line =~ m/^_/ )
+		{
+			my ($varid,$value);
+
+			die "Syntax error for variable ID on line \"$line\"\n"
+				unless ($line =~ m/([^\s]+)\.([^\s]+)(\s+[^\'\"\s]+|\s+\".+\"|\s+\'.+\'|)/ );
+
+			($catid,$varid,$value) = ( $1, $2, $3 );
+			$value =~ s/^\s+//;
+
+			$categories->{$catid}=[] if not defined $categories->{$catid};
+
+			if ($loop)
+			{
+				push @varids,$varid;
+			}
+			else # No loop, expecting only one row for this category
+			{
+				if( (scalar @{$categories->{$catid}}) ne 1)
+                                {
+                                        $categories->{$catid} = [ {} ];
+                                }
+
+                                if( (length $value)==0 ) # expect the value to be on the next line:
+                                {
+                                        $line = <$h>;
+					chomp $line;
+                                        if ( $line =~ m/^;/ )
+                                        {
+                                                $value = substr($line,1);
+                                                while (1)
+                                                {
+                                                        $line = <$h>;
+                                                        last if ( $line =~ m/^;/ );
+
+                                                        chomp $line;
+                                                        $value .= $line;
+                                                }
+                                        }
+                                        else
+                                        {
+                                                $value=$line;
+                                        }
+                                }
+
+                                $categories->{$catid}->[0]->{$varid}=&unquote($value);
+			}
+		}
+		elsif ($loop)
+                {
+                        if ( $line =~ m/^;/ )
+                        {
+                                my $i = scalar @values;
+                                push @values, substr($line,1);
+
+                                while (1)
+                                {
+                                        $line = <$h>;
+                                        last if ( $line =~ m/^;/ );
+
+                                        chomp $line;
+
+                                        $values[$i].=$line;
+                                }
+                        }
+                        else
+                        {
+                                @values = ( @values, &parse_values_line( $line ) );
+                        }
+
+                        my ($nvar,$nval)=(scalar @varids,scalar @values);
+                        if ( $nvar == $nval )
+                        {
+                                my $row={};
+                                for(my $i=0; $i<$nvar; $i++ )
+                                {
+                                        my $value=$values[ $i ];
+                                        $value =~ s/^\"(.*)\"$/$1/;
+                                        $row->{ $varids[$i] }=$value;
+                                }
+                                push @{ $categories->{$catid} }, $row;
+                                @values=();
+                        }
+                        elsif ( $nval > $nvar )
+                        {
+                                my $val='[' . (join ' , ',@values) . ']';
+                                die "Too many values in $catid (length of $val > $nvar)\n";
+                        }
+                }
+	}
+
+	close( $h );
+
+	return $categories;
+}
+
+sub read_mmcif
+{
+	my @HETIGNORE_MMCIF=('HOH','H2O','DOD','D2O','WAT','MOH');
+
+	local($file)=@_;
+
+	my @objs;
+
+	## Parsing ##########################################
+	#my @objs = STAR::Parser->parse($file);
+	#my $data = $objs[0];
+
+	my $data = &parse_mmcif( $file );
+
+	my $entities = &read_entity_tables_mmcif( $data );
+
+	my ($sorted_atoms, $residue_order, $NMODELS, %chain_to_authchain ) = &read_mmcif_atoms( $data );
+
+	my $entities_chain_indices = &mmcif_store_residues_chains( $data, $sorted_atoms, $residue_order );
+
+	## Printing #########################################
+	&print_begin($PID);
+	foreach my $row (@{$data->{'_struct_keywords'}} )
+	{
+		next unless ( defined $row->{'pdbx_keywords'} and &mmcif_valid_columnvalue($row->{'pdbx_keywords'} ));
+		
+		&print_string("Header",uc $row->{'pdbx_keywords'});
+		
+	}
+	&print_text ("  Date", &mmcif_first_revdate( $data ) );
+
+	foreach my $entity_id (sort {$a <=> $b} (keys %{ $entities }) )
+	{
+		my $entity = $entities->{ $entity_id };
+
+		&print_mmcif_entity_compound( $entity );
+		&print_mmcif_entity_source( $data, $entity_id );
+	}
+
+	foreach my $row (@{$data->{'_audit_author'}})
+        {       
+		next unless ( defined $row->{'name'} and &mmcif_valid_columnvalue($row->{'name'} ) );
+
+                # mmCIF puts initials after the author's name
+                my @components = split /,\s*/,($row->{'name'});       
+                &print_string("Author",$components[1].$components[0]);
+        }
+
+	$METHOD = &print_mmcif_expmethod( $data );
+
+	&print_sf;
+
+	&print_int  ("  N-Models",$NMODELS) if ($NMODELS>1 or $METHOD!='X') ;
+
+	my @pp=();
+	foreach my $row (@{$data->{'_computing'}})
+	{
+		push @pp,$row->{'structure_refinement'} if defined $row->{'structure_refinement'} and &mmcif_valid_columnvalue($row->{'structure_refinement'});
+	}
+	foreach my $row (@{$data->{'_pdbx_nmr_software'}})
+	{
+		push @pp,$row->{'name'} if defined $row->{'name'} and  &mmcif_valid_columnvalue($row->{'name'});
+	}
+
+	my @programs=();
+	foreach my $program (@pp)
+        {
+                $program =~ /([\-A-Z]+)/;
+                $program = $1;
+
+                if (defined $known_programs{$program}) {
+                        push @programs, $program unless grep $program, @programs;
+                }
+        }
+        &print_text ("Ref-Prog",(join '/',@programs) ) if (scalar @programs);
+
+        &print_int  ("HSSP-N-Align",$HSSP_NALIGN);
+
+	#RWWH print structure totals
+	&print_total_over_chains();
+
+	&print_mmcif_hetgroups( $data, $sorted_atoms, $residue_order );
+
+	foreach my $entity_id (sort {$a <=> $b} (keys %{ $sorted_atoms } ))
+	{
+		foreach my $chain_id ( @{ $entities_chain_indices->{ $entity_id } } )
+		{
+			&print_entity_chain( $entities->{ $entity_id }, $chain_id, %chain_to_authchain );
+		}
+	}
+
+	&print_end();
+
+	&clean_protein;
+}
+
+sub print_mmcif_entity_source
+{
+	my ($data,$entity_id) = @_;
+
+	foreach my $row (@{$data->{'_entity_src_gen'}})
+	{
+		next if ($row->{'entity_id'} ne $entity_id);
+
+		&print_string( "Source", '('.($row->{'pdbx_gene_src_scientific_name'}).')')	if &mmcif_valid_columnvalue( $row->{'pdbx_gene_src_scientific_name'} );
+		&print_string( "Source", $row->{'gene_src_common_name'} )			if &mmcif_valid_columnvalue( $row->{'gene_src_common_name'} );
+
+		my @s=();
+		push @s, 'organism_taxid: '.$row->{'pdbx_gene_src_ncbi_taxonomy_id'}.';'	if &mmcif_valid_columnvalue( $row->{'pdbx_gene_src_ncbi_taxonomy_id'} );
+		push @s, 'expression_system_common: '.( $row->{'host_org_common_name'} ).';'	if &mmcif_valid_columnvalue( $row->{'host_org_common_name'} );
+		my $taxid=$row->{'pdbx_host_org_ncbi_taxonomy_id'};
+		push @s, 'expression_system_taxid: '.$taxid.';'					if &mmcif_valid_columnvalue( $taxid);
+		my $vector=$row->{'pdbx_host_org_vector'};
+		push @s, 'expression_system_vector: '.$vector.';'				if &mmcif_valid_columnvalue( $vector );
+		my $vectype=$row->{'pdbx_host_org_vector_type'};
+		push @s, 'expression_system_vector_type: '.( $vectype).';'			if &mmcif_valid_columnvalue( $vectype );
+		&print_string( "Source", (join ' ',@s) ) if (scalar @s);
+
+		my $hostscientificname=$row->{'pdbx_host_org_scientific_name'};
+		&print_text (" Expr-Sys",$hostscientificname) if &mmcif_valid_columnvalue( $hostscientificname );
+	}
+
+	foreach my $row (@{$data->{'_entity_src_nat'}})
+	{
+		next if ($row->{'entity_id'} ne $entity_id);
+
+		my ($scientificname,$commonname,$taxid)=($row->{'pdbx_organism_scientific'},$row->{'common_name'},$row->{'pdbx_ncbi_taxonomy_id'});
+
+		&print_string("Source", '('. ($scientificname) .')')		if $scientificname ne '?';
+		&print_string("Source", $commonname )				if $commonname ne '?';
+		&print_string("Source", 'organism_taxid: '.$taxid.';' )		if $taxid ne '?';
+	}
+
+	foreach my $row (@{$data->{'_pdbx_entity_src_syn'}})
+	{
+		next if ($row->{'entity_id'} ne $entity_id);
+
+		my ($scientificname,$commonname,$taxid) = ($key->{'organism_scientific'},$row->{'organism_common_name'},$row->{'ncbi_taxonomy_id'});
+
+		&print_string("Source", '('.$scientificname.')' )		if $scientificname ne '?';
+		&print_string("Source", $commonname )			if $commonname ne '?';
+		&print_string("Source", 'organism_taxid: '.$taxid.';' )		if $taxid ne '?';	
+	}
+}
+
+sub print_mmcif_expmethod
+{
+	my $data = $_[0];
+
+	my ($resolution,$r_factor,$free_r,$method)=('','','','');
+
+	foreach my $row (@{$data->{'_exptl'}})
+	{
+		next unless (defined $row->{'method'} and &mmcif_valid_columnvalue($row->{'method'}) );
+
+		$method=uc $row->{'method'};
+	}
+
+        my @resolutions=();
+	my @rfactors=();
+	my @rfrees=();
+	foreach my $row (@{$data->{'_refine'}})
+        {
+                push(@resolutions,$row->{'ls_d_res_high'}) if (defined $row->{'ls_d_res_high'} and &mmcif_valid_columnvalue($row->{'ls_d_res_high'}) );
+
+		push(@rfactors,$row->{'ls_R_factor_obs'}) 	if (defined $row->{'ls_R_factor_obs'} and &mmcif_valid_columnvalue($row->{'ls_R_factor_obs'}) );
+		push(@rfactors,$row->{'ls_R_factor_R_work'})	if (defined $row->{'ls_R_factor_R_work'} and  &mmcif_valid_columnvalue($row->{'ls_R_factor_R_work'}) );
+
+		push(@rfrees,$row->{'ls_R_factor_R_free'})	if (defined $row->{'ls_R_factor_R_free'} and  &mmcif_valid_columnvalue($row->{'ls_R_factor_R_free'}) );		
+        }
+	foreach my $row (@{$data->{'_em_3d_reconstruction'}})
+	{
+		next unless (defined $row->{'resolution'} and &mmcif_valid_columnvalue($row->{'resolution'}) );
+
+		push(@resolutions,$row->{'resolution'});
+	}
+        if(@resolutions) { $resolution=join("/",@resolutions); }
+
+        if(@rfactors) { $r_factor=join("/",@rfactors); }
+
+        if(@rfrees) { $free_r=join("/",@rfrees); }
+
+	unless ($method) {
+
+		if($resolution || $r_factor) {
+		# What else can it be if there is resolution or rfactor?
+			$method='X-RAY';
+		} elsif ($method =~ /NMR/) {
+			$method='NMR';
+		}
+		#RWWH New rule: If we don't know, it's a model.....
+		unless ($method) {
+			$method='MODEL';
+		}
+	}
+
+	# make the output more compact!
+	if($method =~/NMR/) {
+		$method='NMR';
+	} elsif ($method =~/X-RAY/) {
+		$method='X';
+	} elsif ($method =~/SYNCHROTRON RADIATION/) {
+		$method='X';
+	} elsif ($method =~/MODEL/) {
+		$method='MODEL';
+	} elsif ($method =~/NEUTRON DIFFRACTION/) {
+		$method='NEUTRON';
+	} elsif ($method =~/ELECTRON DIFFRACTION/) {
+		$method='OTHER';
+	} elsif ($method =~/FIBER DIFFRACTION/) {
+		$method='FIBER';
+	} elsif ($method =~/FLUORESCENCE TRANSFER/) {
+		$method='OTHER';
+	} elsif ($method =~/ELECTRON MICROSCOPY/) {
+		$method='OTHER';
+	} else {
+		warning "Unknown method $method for $PID\n";
+		$method='OTHER';
+	}
+
+	$method=&get_overlay($PID,'MET',$method);
+
+	if ($method eq 'NMR') {
+		undef $resolution;
+		undef $r_factor;
+		undef $free_r;
+	}
+	#
+	# Overlay for R and Resolution.
+	#
+	$r_factor  =&get_overlay($PID,'RFA',$r_factor);
+	$resolution=&get_overlay($PID,'RES',$resolution);
+
+	&print_text ("Exp-Method",$method);
+
+	if ($resolution) {
+		&print_float("  Resolution",$resolution);
+	} else {
+		warning "No resolution for structure $PID\n" if ($method eq 'X');
+	}
+	if ($r_factor && $r_factor!=9.99) {
+		&print_float("  R-Factor",$r_factor,"%5.3f");
+		&print_float("   Free-R",$free_r,"%5.3f") if $free_r;
+	} elsif (!$r_factor) {
+		warning "No R-factor for structure $PID\n" if ($method eq 'X');
+	}
+
+	return $method;
+}
+
+# GET THE RELEASE DATE OF THE PDB/MMCIF FILE
+# ==========================================
+# For all practical purposes, it is essential to know when the file was released to the public
+# (e.g. to exclude it for CASP benchmarks), and not when the file was first deposited internally.
+# The public release date is normally stored as the first revision date.
+sub mmcif_first_revdate
+{
+	my $data = $_[0];
+
+	# Try official PDB revision category, is usually not present
+	foreach my $row (@{$data->{'_database_PDB_rev'}})
+	{
+		if( $row->{'num'} eq 1 )
+		{
+			return $row->{'date'};
+		}
+	}
+
+	# Now try the _pdbx_audit_revision_history category, this is usually present
+	foreach my $row (@{$data->{'_pdbx_audit_revision_history'}})
+	{
+		if( $row->{'ordinal'} eq 1 )
+		{
+			return $row->{'revision_date'};
+		}
+	}
+	# Still no luck, so we have to settle with the deposition date instead of the release date
+	foreach my $row (@{$data->{'_pdbx_database_status'}})
+	{
+		next unless ( defined $row->{'recvd_initial_deposition_date'} );
+		return $row->{'recvd_initial_deposition_date'};
+	}
+	# If all failed, try the data collection date
+	foreach my $row (@{$data->{'_diffrn_detector'}})
+	{
+		if( $row->{'diffrn_id'} eq 1 )
+		{
+			return $row->{'pdbx_collection_date'};
+		}
+	}
+        return "";
+}
+
+sub read_pdb
+{ local($file)=@_;
+  local($resid,$type,$atom,$residue,$chain,$res_id,$remark);
+  local($atomfoundflag);
+  
+  $atomfound=0;
+  $highres_id="";
+  # LIST OF RESIDUE CENTERS FOR OVERLAP CHECK
+  @cenxlist=();
+  @cenylist=();
+  @cenzlist=();
+  
+  # let's read the file
+  if ($file=~/\.(Z|gz)$/) {
+    open (FILE,"gzip -dc $file|");
+  } else {
+    open (FILE,"<$file");
+  }
+
+  while(<FILE>)
+  { chomp;
+	if(/^ATOM / || /^HETATM/)
+    { #don't crash on splitting too short lines - just ignore them
+      next if (length($_) < 25);
+      # EK: Remember that we found an atom
+      $atomfound=1;
+      # split the line into the fields we need
+      # $res_id also contains the insertion code
+      ($type,$atom,$altloc,$residue,$chain,$res_id)=unpack("a x11 a4 a1 a3 x a a5",$_);
+      $residue_id=$res_id;
+      if($residue ne $RESIDUE || $residue_id ne $RESIDUE_ID || $chain ne $CHAIN)
+      { # new residue found
+        # remember the highest residue ID stored so far
+        if ($RESIDUE_ID gt $highres_id) { $highres_id=$RESIDUE_ID; }
+	      $N_OXTBAK=$N_OXT;
+	      # Store residue and clear N_OXT etc.
+	      &store_residue($RESIDUE, $CHAIN);
+        # is this a new chain?
+        if($chain ne $CHAIN || $N_OXTBAK)
+        { #printf "New chain '$chain'\n";
+          &store_chain($CHAIN);
+          $CHAIN=$chain;
+          $oldcvalid=0;
+          $cvalid=0;
+          $cavalid=0;
+          $highres_id=""; }
+        else
+        { # EK: If residue contained a valid C, we remember it here to detect chain breaks.
+          if ($cvalid==1)
+          { $oldcvalid=1;
+            $oldcx=$cx;
+            $oldcy=$cy;
+            $oldcz=$cz; }
+          else
+          { $oldcvalid=0; }
+          $cvalid=0;
+          $cavalid=0; }
+        $RESIDUE=$residue;
+	      $RESIDUE_ID=$residue_id;
+	      $oxtfound=0;
+	      # EK: Values of res_invalid: 0=valid, 1=we do not not yet, 2=invalid
+	      $res_invalid=1; }
+      # which kind of line is this?
+      if($type eq 'H')
+      { # this is a HETATM line
+	      $N_HETATM++; }
+      else
+      { # this is a ATOM line
+	      $N_ATOM++; }
+      # what kind of atom is this ?
+      if($atom eq ' N  ')
+      { $N_N++;
+        if ($oldcvalid&&$N_N==1)
+        { # EK: Check for chain break (more secure than CA-CA distance, see 1A7S,PRO44)
+          $nx=substr($_,30,8);
+          $ny=substr($_,38,8);
+          $nz=substr($_,46,8);
+          $d=sqrt(($cx-$nx)**2+($cy-$ny)**2+($cz-$nz)**2);
+          if ($d>2.5)
+          { #printf STDERR "Break before N $residue_id $chain found";
+            $CHAINBREAKFLAG=1; } } }
+      elsif($atom eq ' CA ')
+      { # EK: if the residue ID is lower than or equal to the highest one so far,
+	      #     and if the residue contains an altloc indicator >'A' or >'1', it is safe
+	      #     to skip it
+	      if ($residue_id le $highres_id && $altloc=~/[2-9B-Z]/)
+	      { #printf STDERR "Residue $residue_id $chain skipped without test (highest so far:$highres_id, altloc=$altloc).\n";
+	        if ($res_invalid) { $res_invalid=2; } }
+	      else
+	      { $cax=substr($_,30,8);
+          $cay=substr($_,38,8);
+          $caz=substr($_,46,8);
+          $cavalid++;
+          # EK: add CA coordinates of first valid CA to current chain list
+          if ($cavalid==1)
+          { $caxlist[$CH_N_AMINO_ACIDS]=$cax;
+            $caylist[$CH_N_AMINO_ACIDS]=$cay;
+            $cazlist[$CH_N_AMINO_ACIDS]=$caz;
+            if ($NMODELS==0)
+            { push @cenxlist,$cax;
+              push @cenylist,$cay;
+              push @cenzlist,$caz; }
+            #print "Current list @caxlist..\n";
+            # EK: check CA distance to previous one unless it's the first residue
+            if ($CH_N_AMINO_ACIDS) {
+              if ($altloc=~/ / && $residue_id=~/ $/) {
+                # EK: alternate location and insertion code fields are empty. To gain
+                # speed, we need to check just the last residue for overlaps and breaks
+                $overlapchk=$CH_N_AMINO_ACIDS-1;
+              } else {
+                # EK: if they are not empty, we must check every preceding CA atom in
+                # the chain (some wise guys put all the overlapping residues at the
+                # end of the PDB file, see 1AQM).
+                $overlapchk=0;
+              }
+              # EK: check CA distances
+              while ($overlapchk<$CH_N_AMINO_ACIDS) {
+                $d=($cax-$caxlist[$overlapchk])**2+
+                   ($cay-$caylist[$overlapchk])**2+
+                   ($caz-$cazlist[$overlapchk])**2;
+                $d=sqrt($d);
+                # EK: if the distance is smaller than 1A, and if the residue id
+                #     is lower than or equal to the largest previous one (ignoring
+                #     the insertion code), we skip the residue
+                if ($d<1.0 && substr($residue_id,0,4) le substr($highres_id,0,4))
+                { #printf STDERR "$PID: $RESIDUE_ID is on top of residue ",$overlapchk+1," in chain\n";
+                  if ($res_invalid) { $res_invalid=2; }
+                  last; }
+	              $overlapchk++; }
+              # Bump found? If no, residue is valid (CA without bump)
+              if ($d>=1.0) { $res_invalid=0; }
+              # was the last CA-CA distance too large?
+  	          if ($d>4.5)
+  	          { #printf STDERR "$PID: ChainBreak before $RESIDUE_ID, %5.2f Angstrom",$d;
+                #print "@caxlist,\n";
+                $CHAINBREAKFLAG=1; } } } }
+	      $N_CA++; }
+      elsif($atom eq ' C  ')
+      { $N_C++;
+        if ($N_C==1)
+        { $cx=substr($_,30,8);
+          $cy=substr($_,38,8);
+          $cz=substr($_,46,8);
+          $cvalid=1; } }
+      elsif($atom eq ' O  ') { $N_O++; }
+      elsif($atom eq ' OXT' and $residue ne 'IAS') { $N_OXT++; }
+      else
+      { $N_OTHER++;
+        # EK: check for DNA backbone
+        $DNA_BBFLAGS|=1  if ($atom eq " P  ");
+        $DNA_BBFLAGS|=2  if ($atom eq " O5*" || $atom eq " O5'");
+        $DNA_BBFLAGS|=4  if ($atom eq " C5*" || $atom eq " C5'");
+        $DNA_BBFLAGS|=8  if ($atom eq " C4*" || $atom eq " C4'");
+        $DNA_BBFLAGS|=16 if ($atom eq " C3*" || $atom eq " C3'");
+        $DNA_BBFLAGS|=32 if ($atom eq " O3*" || $atom eq " O3'"); } }
+    elsif(/^REMARK/)
+    { # the second field in the remark record is the remark number:
+      ($f,$no)=split(' ',$_,3); 
+      $remark=substr($_, 11);
+      # shrink all whitespace to one blank
+      $remark=~ s/\s+$/ /g;
+      $REMARK[$no].=$remark;
+      $REMARK[$no].=" "; }
+    elsif (/^MODEL/ || /^ENDMDL/)
+    { # indicates the end of a chain!
+      $NMODELS++ if (/^MODEL/);
+      &store_residue($RESIDUE);
+      &store_chain($CHAIN);
+      if ($atomfound)
+      { # EK: End of first or start of second model reached, ignore all other chains
+        $ignorechainflag=1; } }
+    elsif (/^COMPND/ )
+    { $line=&pdb_unquote(substr($_,10));
+      &push_line(*COMPND,$line); }
+    elsif (/^SOURCE/ )
+    { &push_line(*SOURCE,&pdb_unquote(substr($_,10))); }
+    elsif (/^AUTHOR/ )
+    { if (substr($_, 9, 1) eq " ")
+      { if (substr($_,10,1) eq " ")
+        { warning "First character empty on AUTHOR line in $PID\n";
+	        $l=&trim(&pdb_unquote(substr($_, 11)));	}
+        else
+        { $l=&trim(&pdb_unquote(substr($_, 10)));	} }
+      else
+      { $l=&trim(&pdb_unquote(substr($_, 11))); }
+      $l=~s/,$//; #remove comma at the end.
+      push(@AUTHOR,split(",",$l)); }
+    elsif (/^HEADER/ )
+    { #&process_date(substr($_, 50, 9));
+      &push_line(*HEADER,substr($_, 10, 40)); }
+    elsif (/^REVDAT   1   /)
+    { # EK: NOW THE DATE FIELD CONTAINS THE ACTUAL RELEASE DATE
+      &process_date(substr($_, 13, 9)); }
+    elsif (/^HET / )
+    { $N_HET++;
+      chop;
+      $HET_CODE[$N_HET]=substr($_, 6, 4);
+      $HET_CODE[$N_HET]=~ s/^ +//;
+      $HET_ID[$N_HET]=substr($_, 13, 5);
+      $HET_ID[$N_HET]=~ s/ //g;
+      $HET_CHAIN[$N_HET] = substr($_, 12, 1);
+      $HET_NATOM[$N_HET]=substr($_, 20, 5);
+      $HET_NAME[$N_HET]=substr($_, 29);
+      $HET_NAME[$N_HET]=~ s/^ +//;
+      # RWWH: Replace see-remarks.
+      if ($HET_NAME[$N_HET]=~/SEE REMARK (\d+)/)
+      { local($rno)=$1;
+	      $HET_NAME[$N_HET]=&guess_seeremark($HET_CODE[$N_HET],$HET_NAME[$N_HET],$REMARK[$rno]); }
+      $HET_REVERSE{$HET_ID[$N_HET]}=$N_HET; }
+    elsif (/^HETNAM/)
+    { $CODE=substr($_,10,4);
+      $CODE=~ s/^ +//;
+      $CODE=~ s/(^\s*)(.*?)(\s*$)/\2/;
+      local($located)=0;
+      for ($I_HET=1;$I_HET<=$N_HET;$I_HET++)
+      { $CODE2=$HET_CODE[$I_HET];
+        $CODE2=~ s/(^\s*)(.*?)(\s*$)/\2/;
+        if ($CODE eq $CODE2)
+        { $HET_NAME[$I_HET].=substr($_,15);
+	        $HET_NAME[$I_HET]=~s/  +/ /g;
+	        $HET_NAME[$I_HET]=~s/- /-/g;
+	        $located++;	} }
+      warning "Could not locate HETNAM '$CODE' in $PID\n" unless ($located); }
+    elsif (/^EXPDTA/)
+    { $METHOD = &pdb_unquote(substr($_,6));
+      $METHOD =~ tr/a-z/A-Z/; } }
+
+  &store_residue($RESIDUE);
+  &store_chain($CHAIN);
+  &store_protein;
+}
+
+sub process_date {
+    local($in)=@_;
+    local($month);
+    $in=&get_overlay($PID,"DATE",$in);
+    $month=substr($in,3,3);
+
+    unless ($G_MONTH{$month}) {
+	warning "Illegal month $month in $PID\n";
+	$month="JAN";
+    }
+    if (substr($in,0,2)>$G_MAX_MONTH{$month}) {
+	warning "Illegal day $day of $month in $PID\n";
+    }
+
+    # Y2K bug fix
+    # Haha, if it's 2070, and you are trying to fix this, please mail me to my 96th birthday: elmar@yasara.org ;-))
+    $year=substr($in,7,2);
+    if($year<70) { $century=20; } else { $century=19; }
+    $DATE=$century . $year . "-" . $G_MONTH{$month} . "-" . substr($in,0,2);
+}
+
+sub read_hssp {
+    local($file)=@_;
+
+#    print STDERR "HSSP($PID,$file)\n";
+
+    # lets read the file
+	$file = "bzcat $file|" if $file =~ m/\.bz2$/;
+    my $pid = open(FILE,"$file");
+
+#    while(<FILE>) {
+#	if (/^NALIGN\s+(\d+)/) {
+#	    $HSSP_NALIGN=$1;
+#	    last;		#
+#	}
+#    }
+    while(<FILE>) {
+	if (/^## PROTEINS/) {
+	    last;		# 
+	}
+    }
+    <FILE>;
+    while(<FILE>) {
+	if (/^## ALIGNMENTS/) {
+	    last;		# 
+	}
+	if (/^\s+\d+\s+:\s+(\S+)/) {
+	    unless ($SWISSID{$1}) {
+		$SWISSID{$1}++;
+		$HSSP_NALIGN++;
+	    }
+	} else {
+	    warning "Unrecognized PROTEIN in HSSP file of $PID\n";
+	}
+    }
+
+    kill "TERM", $pid;
+    close(FILE)
+}
+
+sub read_dssp {
+
+  local($file)=@_;
+ 
+  #    print STDERR "DSSP($PID,$file)\n";
+  
+  # lets read the file
+  open(FILE,"$file");
+  
+  #### loop over the input file till the '  #  RESIDUE...' line
+  while(<FILE>) {
+    last if (/^  \#  RESIDUE/);
+  }
+  
+  #### the rest of the file is the data...
+  local($resid);
+  local($pdb, $cha, $aa, $sec, $struc, $l1, $l2, $bp1, $bp2, $lnk, $acc);
+  local($cis);
+  while(<FILE>) {
+    #### extract the amino acid character
+    next if length($_)<20;
+    ($id, $pdb, $cha, $aa, $sec, $struc, $l1, $l2, $bp1, $bp2, $lnk, $acc) 
+      = unpack("A5xa5axax2aa6aaa4a4a1a4",$_);
+    $cis=$aa;
+    $aa =~ s/[a-z]/C/;
+    $resid="$pdb-$cha-$aa";
+    #### lowercase characters are CYS!
+    #### therefore we replace all lowercase with C:
+    if($cis =~ /[a-z]/) {
+      $DSSP_CIS{$resid}=$aa;
+    }
+
+    $DSSP_STRUC{$resid}=$sec;
+    $DSSP_LINK1{$resid}=$l1 if $l1 ne " ";
+    $DSSP_LINK2{$resid}=$l2 if $l2 ne " ";
+  }
+}
+
+sub guess_seeremark {
+    local ($hetid,$orig,$rem)=@_;
+    $orig=~s/\(?SEE REMARK\s+\d+\)?//;
+    $orig=~s/\s*-\s*$//;
+    $orig=~s/\s+/ /g;
+    $orig=~s/^ //;
+    $orig=~s/ $//;
+    $orig=~s/,$//;
+    $rem=~s/\s+/ /g;
+    $rem=~s/^ //;
+    $rem=~s/ $//;
+    $rem=~s/ -/-/g;
+    $rem=~s/- /-/g;
+    1 while ($rem=~s/(\d)\.(\d)/\1_\2/);
+    1 while ($rem=~s/(\d)\, (\d)/\1,\2/);
+    local ($try);
+    if (length($orig)>3) {
+	$try=$orig;
+    } else {
+        $try=$hetid;
+    }
+    if ($rem=~/$hetid IS ([^.]+)\./) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/$hetid IS ([^.]+)$/) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/$hetid: ([^.]+)\. /) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/$hetid: ([^.]+)$/) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/\bIS:? ([^.]+)\./) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/\bIS:? ([^.]+)$/) {
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/ \= ([^.]+)\./) {
+	local($copy)=$1;
+	&postprocess_seeremark($1,*try);
+    } elsif ($rem=~/ \= ([^.]+)$/) {
+	&postprocess_seeremark($1,*try);
+    } elsif (length($rem)>40) {
+	$rem=~s/\.$//;
+	&postprocess_seeremark($rem,*try);
+    } else {
+	warning "Could not extract HET information from REMARK in $PID\n";
+    }
+    return "$try";
+}
+
+sub postprocess_seeremark {
+    local ($extract,*storage)=@_;
+    
+    $extract=~s/THE SYNTHETIC COMPOUND //;
+    $extract=~s/THE MODIFIED PEPTIDE //;
+    $extract=~s/GIVEN TO //;
+    $extract=~s/THE INHIBITOR\, //;
+    $extract=~s/INHIBITED BY A //;
+    $extract=~s/HET GROUP SYSTEMATIC NAME://;
+    $extract=~s/ \(C$//;
+    $extract=~s/ \([^\(\)]+\)$//;
+    $extract=~s/\(PRIME\)/\'/g;
+    local ($nwrd)=($extract=~tr/ / /)+1;
+    local ($len)=length($extract);
+    if ($len/$nwrd>9 && $nwrd<7) {
+	$storage=$extract;
+    } else {
+	local($id)="${PID}:";
+	$id=~tr/A-Z/a-z/;
+	$id.="HET$HET_ID[$N_HET]";
+	warning "Disappointing HET information from REMARK in $PID for $storage\n"
+	    unless $gOVERLAY{$id};
+    }
+}
+
+sub read_sf {
+  my($infil)=@_;
+  # initialize
+  &clean_sf;
+  $expect=1;
+  $skipline=0;
+  $nreflref=0;
+  # Read first line, and try to recognize file type
+  if ($infil=~/\.(Z|gz)$/) {
+    open (IN,"gzip -dc $infil|");
+  } else {
+    open (IN,"<$infil");
+  }
+  $firstline=<IN>;
+  close (IN);
+  # reopen for reflection scanner
+  if ($infil=~/\.(Z|gz)$/) {
+    open (IN,"gzip -dc $infil|");
+  } else {
+    open (IN,"<$infil");
+  }
+  # Call appropriate routine to read that type of file
+  if ($firstline=~/^data_/) {
+    $sftype='CIF';
+    &read_sfcif;
+  } elsif ($firstline=~/^\*/) {
+    $sftype='PDB';
+    &read_sfold;
+  } else {
+    $sftype='Unknown';
+    &read_sfrefls;
+  }
+  close(IN);
+  # If anything was found, print it on output.
+  if ($nreflref>0&&$nreflref!=$nrefl) { warning "$PID: Wrong number of refls counted\n"; }
+}
+
+sub read_sfcif {
+  while (<IN>) {
+    last if (/_refln.index_h/);
+  }
+  &read_sfcifrefls;
+}
+
+sub read_sfold {
+  while (<IN>) {
+    if (/^[\*\#]/) {
+      if (/TOTAL NUMBER OF REFLECTIONS=(\d+)/) {
+	$nrefl=$1;
+      } elsif (/^\*FORMAT/) {
+	$expect=2 if (/\(2\(/);
+	$expect=3 if (/\(3\(/);
+	$skipline=1 if (/\//);
+      } elsif (/TWO REFLECTIONS PER RECORD/) {
+	$expect=2;
+      } elsif (/THREE REFLECTIONS PER RECORD/) {
+	$expect=3;
+      }
+      $minh=$1 if (/MIN H=(-?\d+)/);
+      $mink=$1 if (/MIN K=(-?\d+)/);
+      $minl=$1 if (/MIN L=(-?\d+)/);
+      $maxh=$1 if (/MAX H=(-?\d+)/);
+      $maxk=$1 if (/MAX K=(-?\d+)/);
+      $maxl=$1 if (/MAX L=(-?\d+)/);
+      #print "expect $expect\n";
+      next;
+    } else { return; }
+  }
+}
+
+sub read_sfcifrefls {
+  my($h,$k,$l);
+  while (<IN>) {
+    if (/([-\d]+)\s+([-\d]+)\s+([\d-]+)\s/) {
+      $nrefl++;
+      $h=$1;
+      $k=$2;
+      $l=$3;
+      if ($h>150||$k>150||$l>150||$h<-150||$k<-150||$l<-150) {
+	warning "$PID: Huge index $h $k $l\n" unless $already;
+	$already++;
+	next;
+      } elsif ($h==0&&$k==0&&$l==0) {
+	warning "$PID: Error: 0 0 0 reflection found\n";
+	$nrefl--;
+      }
+      $maxh=$h if $h>$maxh;
+      $maxk=$k if $k>$maxk;
+      $maxl=$l if $l>$maxl;
+      $minh=$h if $h<$minh;
+      $mink=$k if $k<$mink;
+      $minl=$l if $l<$minl;
+    } elsif (/\#END .*-\s+(\d+)\s+reflections/) {
+      $nreflref=$1;
+    } else {
+      #print; 
+    }
+  }
+}
+
+sub read_sfrefls {
+  my($index);
+  my($already)=0;
+  my($h,$k,$l,$xh,$xk,$xl);
+  while (<IN>) {
+    $_=" ".$_;
+    $thisline=0;
+LINE:
+    while (s/([\s-])([\d]+)(\s*[\s-])([\d-]+)(\s*[\s-])([\d-]+)\s//) {
+      $thisline++;
+      if ($thisline>$expect) {
+	<IN> if $skipline;
+	next LINE;
+      }
+      $nrefl++;
+      $xh=$1;
+      $h=$2;
+      $xk=$3;
+      $k=$4;
+      $xl=$5;
+      $l=$6;
+      $h=-$h if $xh=~/-$/;
+      $k=-$k if $xk=~/-$/;
+      $l=-$l if $xl=~/-$/;
+      if ($h>150||$k>150||$l>150||$h<-150||$k<-150||$l<-150) {
+	$_=<IN>; chomp; s/ +$//;
+	if ($_) {
+	  warning "$PID: Huge index: $h $k $l\n" unless $already;
+	  $nrefl=0;
+	  return;
+	} else {
+	  warning "$PID: Last reflection is fake: $h $k $l\n";
+	  $nrefl--;
+	  return;
+	}
+      }
+      $maxh=$h if $h>$maxh;
+      $maxk=$k if $k>$maxk;
+      $maxl=$l if $l>$maxl;
+      $minh=$h if $h<$minh;
+      $mink=$k if $k<$mink;
+      $minl=$l if $l<$minl;
+    }
+    <IN> if $skipline;
+  }
+}
+
+#############################################################################
+sub pdb_upper {
+    local($c,$l)=@_;
+    $l=~tr/a-z/A-Z/;
+    if($c ne "*") {
+	return $c . $l;
+    } else {
+	return $l;
+    }
+}
+
+sub pdb_upper_range {
+    local($r) = shift;
+    $r = uc($r);
+    return $r;
+}
+sub pdb_lower_range {
+    local($r) = shift;
+    $r = lc($r);
+    return $r;
+}
+
+sub pdb_unquote {
+    local($text) = shift;
+    #
+    # Make obvious bugfixes before processing.
+    #
+    $text=~s|DNA/RNA|/DNA(SLASH)RNA\$|g;
+    $text=~s|RNA/DNA|/RNA(SLASH)DNA\$|g;
+    $text=~s|/HUMAN|(SLASH)HUMAN|g;
+    $text=~s|HUMAN/|HUMAN(SLASH)|g;
+    #
+    # Everything is lowercase.
+    $text = lc($text);
+    #
+    # Start of each string is uppercase.
+    # 
+    $text=~s/^([a-z])/&pdb_upper("*",$1)/eg;
+    #
+    # Old files have other ways of quoting.
+    #
+    $text=~s/([,.\*])([a-z\)\(])/&pdb_upper($1,$2)/eg;
+#    $text=~s|/([^$/\n]+).|&pdb_upper_range($1)|eg;
+#    $text=~s/\$([a-z])/&pdb_lower_range($1)/eg;
+    #
+    # Put in special characters.
+    #
+    $text=~s/\(PRIME\)/\'/ig;
+    $text=~s/\(ASTERISK\)/\*/ig;
+    $text=~s/\(SLASH\)/\//gi;
+    $text=~s/\(RIGHT ARROW\)/-\>/gi;
+    $text=~s/\(DOT\)/\./g;
+    #
+    # Make some things a bit nicer
+    #
+    $text=~s/\bdna\b/DNA/gi;
+    $text=~s/\brna\b/RNA/gi;
+    $text=~s/\bnmr\b/NMR/gi;
+    return $text;
+}
+
+sub trim {
+  local($text)=@_;
+  $text=~s/^\s+//;
+  $text=~s/\s+$//;
+  return $text;
+}
+
+
+
+
+## here comes the hand corrected data from Ingrid Warny
+__END__
+# comments start with #
+# format id:KEY value
+#
+# Key is one of:
+# RFA    = rfactor
+# RES    = resolution
+# MET    = method
+# HET### = Name of HET group with code ###.
+#
+# Set RFA to 9.99 for structures with no Rfactor in literature.
+# If there is one value, it is supposed to overwrite a NIL value.
+# If the value given is 2 strings separated by one or more TABs, the second
+# replaces the first. If an entry with a trailing TAB is found, the value
+# is replaced by nothing.
+# An alarm is given when the first string does not match the value found.
+# 
+155c:RFA "9.99"   # None found in literature
+1aat:RFA "9.99"   # None found in literature
+1acx:RFA "0.38"
+#RWWH Removed: 1bti:RFA "0.171		0.159"
+1cbp:RFA "9.99"   # None found in literature
+#RWWH Removed: 1chg:MET MODEL
+1coh:RFA "0.191"
+1cpb:RFA "0.325"
+1crn:RFA "0.114"
+1cro:RFA "9.99"   # None found in literature
+1cse:RFA "0.178"
+1ctx:RFA "9.99"   # None found in literature
+1cyc:RFA "9.99"   # None found in literature
+1eca:RFA "0.183"
+1ecd:RFA "0.183"
+1ecn:RFA "0.191"
+1efm:RFA "0.246"
+1est:RFA "0.326"
+1etu:RFA "0.33"
+1fc1:RFA "0.22"
+1fc2:RFA "0.22"
+#RWWH Removed: 1fc2:RES "2.8		2.9"
+1fdh:RFA "0.319"
+1fdx:RFA "0.206"
+1fx1:RFA "9.99"   # None found in literature
+1gcn:RFA "9.99"   # None found in literature
+#RWWH Removed: 1gpd:MET "MODEL"
+1hco:RFA "0.29"
+1hds:RFA "0.25"
+1hkg:RFA "0.26"
+1hr3:RFA "9.99"   # None found in literature
+1hrb:RFA "0.43"
+1kga:RFA "9.99"   # None found in literature
+1lh1:RFA "0.273"
+1lh2:RFA "0.273"
+1lh3:RFA "0.273"
+#1lh4:RFA "0.273"
+1lh5:RFA "0.273"
+1lh6:RFA "0.273"
+1lh7:RFA "0.273"
+1lrp:RFA "9.99"   # None found in literature
+1lyz:RFA "9.99"   # None found in literature
+1lzh:RFA "9.99"   # None found in literature
+1lzt:RFA "0.254"
+1mbd:RFA "0.188"
+1mbn:RFA "9.99"   # None found in literature
+1mbo:RFA "0.159"
+1mbs:RFA "0.268"
+1mle:RFA "9.99"   # None found in literature
+1mli:RFA "9.99"   # None found in literature
+# 1nrd:RFA "9.99"   # None found in literature, file obsolete
+1nxb:RFA "0.24"
+1ovo:RFA "0.2"
+1pad:RFA "9.99"   # None found in literature
+1pgi:RFA "9.99"   # None found in literature
+1ppt:RFA "9.99"   # None found in literature
+# 1pte:RFA "9.99"   # None found in literature, file obsolete
+1pyk:RFA "9.99"   # None found in literature
+1pyp:RFA "9.99"   # None found in literature
+1r08:RFA "9.99"   # None found in literature
+1r09:RFA "9.99"   # None found in literature
+1rei:RFA "0.24"
+1rhd:RFA "9.99"   # None found in literature
+1rmu:RFA "9.99"   # None found in literature
+1sbt:RFA "0.44"
+1srx:RFA "9.99"   # None found in literature
+1tgb:RFA "0.225"
+1tgc:RFA "0.180"
+1tgn:RFA "0.223"
+1tgs:RFA "0.186"
+1tgt:RFA "0.187"
+1thi:RFA "9.99"   # None found in literature
+1tim:RFA "0.268"
+1tpa:RFA "0.175"
+1tpo:RFA "0.180"
+1tpp:RFA "0.191"
+2cga:RFA "0.173"
+2cha:RFA "0.5"    # Really...
+2cna:RFA "0.41"
+2dhb:RFA "9.99"   # None found in literature
+2hco:RFA "0.29"
+2lh1:RFA "0.273"
+2lh2:RFA "0.273"
+2lh3:RFA "0.273"
+#2lh4:RFA "0.273"
+2lh5:RFA "0.273"
+2lh6:RFA "0.273"
+2lh7:RFA "0.273"
+2lyz:RFA "9.99"   # None found in literature
+2lzh:RFA "9.99"   # None found in literature
+2mb5:RFA "0.115"
+2mhb:RFA "0.231"
+2pad:RFA "9.99"   # None found in literature
+2pab:RFA "0.29"
+2pgk:RFA "0.35"
+2ptc:RFA "0.187"
+2ptn:RFA "0.193"
+2r04:RFA "9.99"   # None found in literature
+2r06:RFA "9.99"   # None found in literature
+2r07:RFA "9.99"   # None found in literature
+2rm2:RFA "9.99"   # None found in literature
+2rmu:RFA "9.99"   # None found in literature
+2rr1:RFA "9.99"   # None found in literature
+2rs1:RFA "9.99"   # None found in literature
+2rs3:RFA "9.99"   # None found in literature
+2rs5:RFA "9.99"   # None found in literature
+2sbt:RFA "9.99"   # None found in literature
+2sns:RFA "9.99"   # None found in literature
+2sod:RFA "0.256"
+2ssi:RFA "9.99"   # None found in literature
+2stv:RFA "9.99"   # None found in literature
+2taa:RFA "9.99"   # None found in literature
+2tbv:RFA "0.20"
+2tga:RFA "0.197"
+2tgp:RFA "0.2"
+2tgt:RFA "0.209"
+2tma:RFA "9.99"   # None found in literature
+2tpi:RFA "0.2"
+2yhx:RFA "0.25"
+3b5c:RFA "0.22/0.16/0.19	0.16"
+3cna:RFA "9.99"   # None found in literature
+3cpa:RFA "0.162"
+3cyt:RFA "0.208"
+# 3fxc:RFA "0.31"     # file obsolete
+3fxn:RFA "0.214"
+3ins:RFA "0.182"
+######3ldh:RFA "0.52" Hier mot iemand na kijke.
+3lyz:RFA "0.364"
+3pgk:RFA "9.99"   # None found in literature
+3pgm:RFA "0.29"
+3ptb:RFA "0.182"
+3ptn:RFA "0.198"
+3tpi:RFA "0.193"
+4cat:RFA "9.99"   # None found in literature
+4cpa:RFA "0.196"
+4fxn:RFA "0.200"
+4lyz:RFA "0.420"
+4pad:RFA "9.99"   # None found in literature
+4pti:RFA "0.162"
+5adh:RFA "0.26"
+5cha:RFA "0.179"
+5cpa:RFA "0.190"
+5lyz:RFA "0.420"
+5pad:RFA "9.99"   # None found in literature
+5pti:RFA "0.200"
+5rsa:RFA "0.159"
+5rxn:RFA "0.137		0.115"
+5tim:RFA "0.183"
+6cha:RFA "0.200"
+6lyz:RFA "0.372"
+6pad:RFA "9.99"   # None found in literature
+6rsa:RFA "0.188"
+6tim:RFA "0.37"
+7cat:RFA "0.212"
+7lyz:RFA "0.355"
+8cat:RFA "0.191"
+8lyz:RFA "9.99"   # None found in literature
+9hvp:RFA "0.177"
+#
+# August 30, 1994, Rob Hooft.
+#
+4blm:RFA "0.151/0.16	0.151"
+#
+# August 31, 1994, Rob Hooft.
+#
+1bna:RFA "0.173"
+1aga:MET "X	FIBER"
+1ana:RFA "0.205"
+1c4s:MET "X	FIBER"
+1cap:MET "X	FIBER"
+1car:MET "X	FIBER"
+1hya:MET "X	FIBER"
+1kes:MET "X	FIBER"
+1ppt:RFA "0.279"
+2c4s:MET "X	FIBER"
+#2dpv:RFA "0.36"
+2hya:MET "X	FIBER"
+3hya:MET "X	FIBER"
+4hya:MET "X	FIBER"
+1ifd:RFA "3.600	"
+#
+# Jan 17, 1995, Rob Hooft
+#
+1fpv:RFA "9.99"
+1grh:RFA "0.168"
+4tna:RFA "0.21"
+1zna:RFA "0.21"
+1hri:RFA "9.99"
+1aoz:RFA "0.203"
+1dn6:RFA "0.33"
+1hla:RFA "0.185"
+1eco:RFA "0.191"
+#1ms2:RFA "0.157"
+4cro:RFA "9.99"
+2hvp:RFA "0.485"  # used unrefined value from paper
+1tmf:RFA "0.271"  # probably much too conservative, no other number given
+# 1phy:RFA "0.22"    # file obsolete
+1eps:RFA "9.99"   # R-factor of 23.2% is given for a 2.5A dataset!
+1dhr:RFA "0.154"
+3ldh:RFA "0.50"
+1d89:RFA "0.201"
+1gpd:RFA "9.99"
+1mec:RFA "9.99"
+1pca:RFA "0.169"
+1pop:RFA "0.198"
+1xia:RFA "9.99"
+6lyz:RFA "0.37"
+6tna:RFA "0.253"
+6adh:RFA "0.379"
+1lz2:RFA "0.452"
+4azu:RFA "0.176"
+5azu:RFA "0.175"
+5pfk:RFA "0.44"
+1baf:HET250 "NPP	2,2,6,6-TETRAMETHYL-1-OXY-4-((2,4-DINITRO-5-ETHYLDIAMINYL)PHENYLAMINO)DINITROPHENYL"
+1cbq:HET200 "COMPOUND 19	6-(2,3,4,5,6,7-HEXAHYDRO-2,4,4-TRIMETHYL-1-METHYLENEINDEN-2-YL)-3-METHYLHEXA-2,4-DIENOIC ACID"
+1cbq:HET901 "PHOSPHATE GROUP	PHOSPHATE GROUP"
+1csa:HET1 "BMT	3-HYDROXY-4-METHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+1cya:HET1 "BMT	3-HYDROXY-4-METHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+1cyb:HET1 "BMT	3-HYDROXY-4-METHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+1d35:HET9 "MAR	DAUNORUBICIN DERIVATIVE"
+1d36:HET7 "MAR	DAUNORUBICIN DERIVATIVE"
+1htp:HET63 "OSS	6-(HYDROXYETHYLDITHIO)-8-(AMINOMETHYLTHIO)OCTANOIC ACID"
+1pob:HET930 "DIC8(2PH)PE	L-1-O-OCTYL-2-HEPTYL-PHOSPHONYL-SN-GYCERO-3-PHOSPHOETHANOLAMINE"
+1pob:HET935 "DIC8(2PH)PE	L-1-O-OCTYL-2-HEPTYL-PHOSPHONYL-SN-GYCERO-3-PHOSPHOETHANOLAMINE"
+2rma:HET1 "BMT	3-HYDROXY-4-METHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+2rmb:HET1 "DMT	3-HYDROXY-4,4-DIMETHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+2rmc:HET1 "BMT	3-HYDROXY-4-METHYL-2-(METHYLAMINO)-6-OCTENOIC ACID"
+3cys:HET201 "BMT	(4R)-4-[(E)-2-BUTENYL]-4,N-DIMETHYL-L-THREONINE"
+4gr1:HET481 "RGS	N4-(MALONYL-D-CYSTEINYL)-L-2,4-DIAMINOBUTYRATE DISULFIDE"
+4gst:HET218 "GTD	1-(S-GLUTATHIONYL)-2,4,6-TRINITROCYCLOHEXADIENATE ANION"
+#
+# No longer recognized after changing "R" regular expression. Dec 12, 1995
+#
+1chg:RFA "0.43"
+2gch:RFA "0.323"
+#
+# Manual correction of two errors recognized by the PDB, Jan 18, 1996
+#
+1tlc:RFA "0.019	0.186"
+1hup:RFA "0.025	0.193"
+#
+# New disappointing HET,  Feb 1, 1996
+#
+1cwb:HET1 "DMT	4-[(E)-2-BUTENYL]-4,4,N-TRIMETHYL-L-THREONINE"
+#
+# No longer recognized after changing "R" regular expression. Jun 12, 1996
+#
+1bpi:RFA "0.146"
+
