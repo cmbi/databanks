@@ -117,11 +117,13 @@ class HsspJob(Job):
 
         if os.path.isfile(in_path):
             _log.debug("[hssp] %s" % ' '.join(cmd))
-            with open(err_path, 'w') as f:
-                p = Popen(cmd, stderr=f, stdout=PIPE)
-                p.wait()
-                for line in p.stdout:
-                    _log.debug("[hssp] %s" % line.strip())
+            p = Popen(cmd, stderr=PIPE, stdout=PIPE)
+            stdout, stderr = p.communicate()
+            with open(err_path, 'wb') as f:
+                f.write(stderr)
+
+            for line in stdout.decode('ascii').split('\n'):
+                _log.info("[hssp] %s" % line)
 
         if os.path.isfile(out3_path):
             log_command(_log, 'hssp',
