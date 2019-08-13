@@ -1,6 +1,6 @@
 import os
 from bz2 import BZ2File
-from subprocess import Popen, PIPE
+import subprocess
 
 from databanks.queue import Job
 from databanks.settings import settings
@@ -81,8 +81,7 @@ class HgHsspJob(Job):
 
         if os.path.isfile(in_path):
             _log.debug("[hghssp] %s" % ' '.join(cmd))
-            p = Popen(cmd, stderr=PIPE, stdout=PIPE)
-            p.wait()
+            p = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
             while True:
                 out_line = p.stdout.readline()
                 if out_line:
@@ -117,12 +116,11 @@ class HsspJob(Job):
 
         if os.path.isfile(in_path):
             _log.debug("[hssp] %s" % ' '.join(cmd))
-            p = Popen(cmd, stderr=PIPE, stdout=PIPE)
-            stdout, stderr = p.communicate()
+            p = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
             with open(err_path, 'wb') as f:
-                f.write(stderr)
+                f.write(p.stderr)
 
-            for line in stdout.decode('ascii').split('\n'):
+            for line in p.stdout.decode('ascii').split('\n'):
                 _log.info("[hssp] %s" % line)
 
         if os.path.isfile(out3_path):

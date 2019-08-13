@@ -4,7 +4,7 @@ import psutil
 from threading import Thread
 from time import time, sleep
 
-from subprocess import Popen, PIPE
+from subprocess import run, PIPE, TimeoutExpired
 import logging
 
 _log = logging.getLogger(__name__)
@@ -36,72 +36,28 @@ def process_tree_cpu_time(pid):
     except psutil.NoSuchProcess:
         return 0.0
 
-class _LogThread(Thread):
-    def __init__(self, p, log, tag):
-        Thread.__init__(self)
-        self._p = p
-        self._log = log
-        self._tag = tag
-
-
-class _LogStdoutThread(_LogThread):
-    def run(self):
-        while self._p.poll() is None:
-            line = self._p.stdout.readline()
-            if len(line) <= 0:
-                break
-            self._log.debug("[%s] %s" % (self._tag, line.strip()))
-        self._p.stdout.close()
-
-
-class _LogStderrThread(_LogThread):
-    def run(self):
-        while self._p.poll() is None:
-            line = self._p.stderr.readline()
-            if len(line) <= 0:
-                break
-            self._log.error("[%s] %s" % (self._tag, line.strip()))
-        self._p.stderr.close()
-
 
 def log_command(log, tag, cmdstr,
                 cwd=None, timeout=None, strin=None):
     """Returns False if the command times out, True otherwise."""
 
-    if strin is not None:
-        p = Popen(cmdstr, shell=True,
-                  stdout=PIPE, stderr=PIPE, stdin=PIPE,
-                  close_fds=True,
-                  cwd=cwd)
-        p.stdin.write(strin.encode('ascii'))
-        p.stdin.close()
-    else:
-        p = Popen(cmdstr, shell=True,
-                  stdout=PIPE, stderr=PIPE,
-                  close_fds=True,
-                  cwd=cwd)
     log.info("[%s] %s" % (tag, cmdstr))
-
-    tout = _LogStdoutThread(p, log, tag)
-    tout.start()
-    terr = _LogStderrThread(p, log, tag)
-    terr.start()
-
-    t0 = time()
-    if timeout is not None:
-        while (time() - t0) < timeout:
-            sleep(1)
-            if p.poll() is not None:
-                tout.join()
-                terr.join()
-                return True
-
-        kill_process_tree(p.pid)
-        tout.join()
-        terr.join()
+    try:
+        if strin is not None:
+            p = run(cmdstr, input=strin.encode('ascii'), shell=True,
+                    stdout=PIPE, stderr=PIPE,
+                    cwd=cwd, timeout=timeout)
+        else:
+            p = run(cmdstr, shell=True,
+                    stdout=PIPE, stderr=PIPE,
+                    cwd=cwd, timeout=timeout)
+    except TimeoutExpired:
         return False
-    else:
-        p.wait()
-        tout.join()
-        terr.join()
-        return True
+
+    for line in p.stdout.decode('ascii').split('\n'):
+        log.debug("[%s] %s" % (tag, line))
+
+    for line in p.stderr.decode('ascii').split('\n'):
+        log.error("[%s] %s" % (tag, line))
+
+    return True
