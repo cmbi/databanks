@@ -81,16 +81,20 @@ class HgHsspJob(Job):
 
         if os.path.isfile(in_path):
             _log.debug("[hghssp] %s" % ' '.join(cmd))
-            p = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            while True:
-                out_line = p.stdout.readline()
-                if out_line:
-                    log.debug("[hghssp] %s" % out_line.strip())
-                err_line = p.stderr.readline()
-                if err_line:
-                    log.error("[hghssp] %s" % err_line.strip())
-                if not out_line and not err_line:
-                    break
+
+            p = None
+            while p is None:
+                try:
+                    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout, stderr = p.communicate()
+                except OSError:
+                    continue
+
+            for line in stdout.decode('ascii').split('\n'):
+                _log.debug("[hghssp] %s" % out_line.strip())
+
+            for line in stderr.decode('ascii').split('\n'):
+                _log.error("[hghssp] %s" % out_line.strip())
 
 
 class HsspJob(Job):
@@ -116,11 +120,19 @@ class HsspJob(Job):
 
         if os.path.isfile(in_path):
             _log.debug("[hssp] %s" % ' '.join(cmd))
-            p = subprocess.run(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-            with open(err_path, 'wb') as f:
-                f.write(p.stderr)
 
-            for line in p.stdout.decode('ascii').split('\n'):
+            p = None
+            while p is None:
+                try:
+                    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    stdout, stderr = p.communicate()
+                except OSError:
+                    continue
+
+            with open(err_path, 'wb') as f:
+                f.write(stderr)
+
+            for line in stdout.decode('ascii').split('\n'):
                 _log.info("[hssp] %s" % line)
 
         if os.path.isfile(out3_path):

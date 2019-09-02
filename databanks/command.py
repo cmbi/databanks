@@ -4,7 +4,7 @@ import psutil
 from threading import Thread
 from time import time, sleep
 
-from subprocess import run, PIPE, TimeoutExpired
+from subprocess import Popen, PIPE, TimeoutExpired
 import logging
 
 _log = logging.getLogger(__name__)
@@ -42,22 +42,26 @@ def log_command(log, tag, cmdstr,
     """Returns False if the command times out, True otherwise."""
 
     log.info("[%s] %s" % (tag, cmdstr))
-    try:
-        if strin is not None:
-            p = run(cmdstr, input=strin.encode('ascii'), shell=True,
-                    stdout=PIPE, stderr=PIPE,
-                    cwd=cwd, timeout=timeout)
-        else:
-            p = run(cmdstr, shell=True,
-                    stdout=PIPE, stderr=PIPE,
-                    cwd=cwd, timeout=timeout)
-    except TimeoutExpired:
-        return False
+    p = None
+    while p is None:
+        try:
+            if strin is not None:
+                input_= strin.encode('ascii')
+            else:
+                input_ = None
 
-    for line in p.stdout.decode('ascii').split('\n'):
+            p = Popen(cmdstr, shell=True, cwd=cwd, stdout=PIPE, stderr=PIPE)
+
+            stderr, stdout = p.communicate(input=strin, timeout=timeout)
+        except OSError:
+            continue
+        except TimeoutExpired:
+            return False
+
+    for line in stdout.decode('utf-8').split('\n'):
         log.debug("[%s] %s" % (tag, line))
 
-    for line in p.stderr.decode('ascii').split('\n'):
+    for line in stderr.decode('utf-8').split('\n'):
         log.error("[%s] %s" % (tag, line))
 
     return True
