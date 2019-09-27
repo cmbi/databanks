@@ -146,7 +146,7 @@ class PdbreportJob(Job):
         if log_command(_log, 'pdbreport', ". %s; %s %s" % (ccp4setup,
                                                            whatcheck,
                                                            in_path),
-                       cwd=out_dir, timeout=60 * 60):
+                       cwd=out_dir, timeout=5 * 60):
             if os.path.isfile(txt_path):
                 log_command(_log, 'pdbreport', htmlgen,
                             cwd=out_dir)
