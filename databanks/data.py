@@ -14,8 +14,9 @@ from databanks.pdbreport import (pdbreport_uptodate, PdbreportJob,
                                  PdbreportCleanupJob)
 from databanks.bdb import (bdb_uptodate, BdbJob, BdbCleanupJob)
 from databanks.pdb import (pdb_flat_uptodate, PdbExtractJob)
-from databanks.wilist import (wilist_uptodate, WilistJob, lis_types,
-                              WilistCleanupJob, wilist_failed_path)
+#from databanks.wilist import (wilist_uptodate, WilistJob, lis_types,
+#                              WilistCleanupJob, wilist_failed_path)
+from databanks.wilist import wilist_data_path
 from databanks.hbonds import (hbonds_uptodate, HbondsJob)
 from databanks.scene import (scene_uptodate, SceneJob, SceneCleanupJob,
                              lis_types as scene_types)
@@ -145,6 +146,34 @@ class ScheduleMmcifDataJob(Job):
                                                     "pdbfinder2/PDBFIND2.TXT"),
                                        [pdbfinder2_join_job]), priority=10)
 
+class ScheduleSceneDataJob(Job):
+    def __init__(self, queue, pdb_fetch_job, redo_fetch_job):
+        Job.__init__(self, "schedule_scenes", [pdb_fetch_job, redo_fetch_job])
+
+        self._queue = queue
+        self._pdb_fetch_job = pdb_fetch_job
+        self._redo_fetch_job = redo_fetch_job
+
+    def run(self):
+        for lis in scene_types:
+            self._queue.put(SceneCleanupJob(self._pdb_fetch_job, 'pdb', lis))
+            self._queue.put(SceneCleanupJob(self._pdbredo_fetch_job, 'redo', lis))
+
+        for src in ['pdb', 'redo']:
+            for lis in scene_types:
+                scene_annotated = annotated_set('%s_SCENES_%s' % (src.upper(), lis))
+                jobs = []
+                for pdbid in os.listdir(os.path.join(settings["DATADIR"], "wi-lists", src, lis)):
+                    if os.path.isfile(wilist_data_path(src, lis, pdbid)) and pdbid not in scene_annotated:
+                        job = SceneJob(src, lis, pdbid)
+                        self._queue.put(job)
+                        jobs.append(job)
+
+                self._queue.put(WhynotCrawlJob('%s_SCENES_%s' % (src.upper(), lis),
+                                               os.path.join(settings["DATADIR"],
+                                                            'wi-lists/%s/scenes/%s' % (src, lis)),
+                                               jobs), priority=10)
+
 
 class SchedulePdbDataJob(Job):
     def __init__(self, queue, pdb_fetch_job):
@@ -158,32 +187,31 @@ class SchedulePdbDataJob(Job):
         dssp_annotated = annotated_set('DSSP')
         pdbreport_annotated = annotated_set('PDBREPORT')
         bdb_annotated = annotated_set('BDB')
-        wilist_annotated = {lis: annotated_set('WHATIF_PDB_%s' % lis)
-                            for lis in lis_types}
-        scene_annotated = {lis: annotated_set('PDB_SCENES_%s' % lis)
-                           for lis in scene_types}
+        #wilist_annotated = {lis: annotated_set('WHATIF_PDB_%s' % lis)
+        #                    for lis in lis_types}
+        #scene_annotated = {lis: annotated_set('PDB_SCENES_%s' % lis)
+        #                   for lis in scene_types}
 
         pdbreport_jobs = []
         pdbreport_clean_job = PdbreportCleanupJob(self._pdb_fetch_job)
         self._queue.put(pdbreport_clean_job, priority=10)
         pdbreport_jobs.append(pdbreport_clean_job)
 
-        wilist_jobs = {}
-        for lis in lis_types:
-            wilist_jobs[lis] = []
-            clean_job = WilistCleanupJob(self._pdb_fetch_job, 'pdb', lis)
-            self._queue.put(clean_job, priority=10)
-            wilist_jobs[lis].append(clean_job)
+        #wilist_jobs = {}
+        #for lis in lis_types:
+        #    wilist_jobs[lis] = []
+        #    clean_job = WilistCleanupJob(self._pdb_fetch_job, 'pdb', lis)
+        #    self._queue.put(clean_job, priority=10)
+        #    wilist_jobs[lis].append(clean_job)
+        #
+        #scene_jobs = {}
+        #for lis in scene_types:
+        #    scene_jobs[lis] = []
+        #    clean_job = SceneCleanupJob(self._pdb_fetch_job, 'pdb', lis)
+        #    self._queue.put(clean_job, priority=10)
+        #    scene_jobs[lis].append(clean_job)
 
-
-        scene_jobs = {}
-        for lis in scene_types:
-            scene_jobs[lis] = []
-            clean_job = SceneCleanupJob(self._pdb_fetch_job, 'pdb', lis)
-            self._queue.put(clean_job, priority=10)
-            scene_jobs[lis].append(clean_job)
-
-        hbonds_jobs = []
+        #hbonds_jobs = []
 
         bdb_jobs = []
         bdb_clean_job = BdbCleanupJob(self._pdb_fetch_job)
@@ -222,27 +250,27 @@ class SchedulePdbDataJob(Job):
                 self._queue.put(pdbreport_job, priority=1)
                 pdbreport_jobs.append(pdbreport_job)
 
-            for lis in lis_types:
-                wilist_job = None
-                if not wilist_uptodate('pdb', lis, pdbid) and pdbid not in wilist_annotated[lis] and \
-                        not os.path.isfile(wilist_failed_path('pdb', lis, pdbid)):
-                    _log.debug("add pdb wilist job for %s" % pdbid)
-                    wilist_job = WilistJob('pdb', lis, pdbid, pdb_extract_job)
-                    self._queue.put(wilist_job)
-                    wilist_jobs[lis].append(wilist_job)
-
-                if lis in scene_types and not scene_uptodate('pdb', lis, pdbid) and \
-                        pdbid not in scene_annotated[lis]:
-                    _log.debug("add pdb scene job for %s" % pdbid)
-                    scene_job = SceneJob('pdb', lis, pdbid, wilist_job)
-                    self._queue.put(scene_job)
-                    scene_jobs[lis].append(scene_job)
-
-            if not hbonds_uptodate(pdbid):
-                _log.debug("add hbonds job for %s" % pdbid)
-                hbonds_job = HbondsJob(pdbid, pdb_extract_job)
-                self._queue.put(hbonds_job)
-                hbonds_jobs.append(hbonds_job)
+            #for lis in lis_types:
+            #    wilist_job = None
+            #    if not wilist_uptodate('pdb', lis, pdbid) and pdbid not in wilist_annotated[lis] and \
+            #            not os.path.isfile(wilist_failed_path('pdb', lis, pdbid)):
+            #        _log.debug("add pdb wilist job for %s" % pdbid)
+            #        wilist_job = WilistJob('pdb', lis, pdbid, pdb_extract_job)
+            #        self._queue.put(wilist_job)
+            #        wilist_jobs[lis].append(wilist_job)
+            #
+            #    if lis in scene_types and not scene_uptodate('pdb', lis, pdbid) and \
+            #            pdbid not in scene_annotated[lis]:
+            #        _log.debug("add pdb scene job for %s" % pdbid)
+            #        scene_job = SceneJob('pdb', lis, pdbid, wilist_job)
+            #        self._queue.put(scene_job)
+            #        scene_jobs[lis].append(scene_job)
+            #
+            #if not hbonds_uptodate(pdbid):
+            #    _log.debug("add hbonds job for %s" % pdbid)
+            #    hbonds_job = HbondsJob(pdbid, pdb_extract_job)
+            #    self._queue.put(hbonds_job)
+            #    hbonds_jobs.append(hbonds_job)
 
         self._queue.put(WhynotCrawlJob('BDB',
                                        os.path.join(settings["DATADIR"],
@@ -252,21 +280,21 @@ class SchedulePdbDataJob(Job):
                                        os.path.join(settings["DATADIR"],
                                                     'pdbreport'),
                                        pdbreport_jobs), priority=10)
-        for lis in lis_types:
-            self._queue.put(WhynotCrawlJob('WHATIF_PDB_%s' % lis,
-                                           os.path.join(
-                                               settings["DATADIR"],
-                                               'wi-lists/pdb/%s' % lis
-                                           ),
-                                           wilist_jobs[lis]), priority=10)
-        for lis in scene_types:
-            self._queue.put(WhynotCrawlJob(
-                                'PDB_SCENES_%s' % lis,
-                                 os.path.join(
-                                     settings["DATADIR"],
-                                     'wi-lists/pdb/scenes/%s' % lis
-                                 ),
-                                 scene_jobs[lis]), priority=10)
+        #for lis in lis_types:
+        #    self._queue.put(WhynotCrawlJob('WHATIF_PDB_%s' % lis,
+        #                                   os.path.join(
+        #                                       settings["DATADIR"],
+        #                                       'wi-lists/pdb/%s' % lis
+        #                                   ),
+        #                                   wilist_jobs[lis]), priority=10)
+        #for lis in scene_types:
+        #    self._queue.put(WhynotCrawlJob(
+        #                        'PDB_SCENES_%s' % lis,
+        #                         os.path.join(
+        #                             settings["DATADIR"],
+        #                             'wi-lists/pdb/scenes/%s' % lis
+        #                         ),
+        #                         scene_jobs[lis]), priority=10)
 
 
 class SchedulePdbredoDataJob(Job):
@@ -280,29 +308,29 @@ class SchedulePdbredoDataJob(Job):
 
         pdbredo_annotated = annotated_set('PDB_REDO')
         dsspredo_annotated = annotated_set('DSSP_REDO')
-        wilist_annotated = {lis: annotated_set('WHATIF_REDO_%s' % lis)
-                            for lis in lis_types}
-        scene_annotated = {lis: annotated_set('REDO_SCENES_%s' % lis)
-                           for lis in scene_types}
+        #wilist_annotated = {lis: annotated_set('WHATIF_REDO_%s' % lis)
+        #                    for lis in lis_types}
+        #scene_annotated = {lis: annotated_set('REDO_SCENES_%s' % lis)
+        #                   for lis in scene_types}
 
         dsspredo_jobs = []
         dsspredo_clean_job = DsspredoCleanupJob(self._pdbredo_fetch_job)
         self._queue.put(dsspredo_clean_job, priority=10)
         dsspredo_jobs.append(dsspredo_clean_job)
 
-        wilist_jobs = {}
-        for lis in lis_types:
-            wilist_jobs[lis] = []
-            clean_job = WilistCleanupJob(self._pdbredo_fetch_job, 'redo', lis)
-            self._queue.put(clean_job, priority=10)
-            wilist_jobs[lis].append(clean_job)
-
-        scene_jobs = {}
-        for lis in scene_types:
-            scene_jobs[lis] = []
-            clean_job = SceneCleanupJob(self._pdbredo_fetch_job, 'redo', lis)
-            self._queue.put(clean_job, priority=10)
-            scene_jobs[lis].append(clean_job)
+        #wilist_jobs = {}
+        #for lis in lis_types:
+        #    wilist_jobs[lis] = []
+        #    clean_job = WilistCleanupJob(self._pdbredo_fetch_job, 'redo', lis)
+        #    self._queue.put(clean_job, priority=10)
+        #    wilist_jobs[lis].append(clean_job)
+        #
+        #scene_jobs = {}
+        #for lis in scene_types:
+        #    scene_jobs[lis] = []
+        #    clean_job = SceneCleanupJob(self._pdbredo_fetch_job, 'redo', lis)
+        #    self._queue.put(clean_job, priority=10)
+        #    scene_jobs[lis].append(clean_job)
 
         for pdbredo_path in list_pdbredo():
             pdbid = os.path.basename(pdbredo_path)[:4]
@@ -313,42 +341,42 @@ class SchedulePdbredoDataJob(Job):
                 self._queue.put(dsspredo_job)
                 dsspredo_jobs.append(dsspredo_job)
 
-            for lis in lis_types:
-                wilist_job = None
-                if not wilist_uptodate('redo', lis, pdbid) and \
-                        pdbid not in wilist_annotated[lis] and \
-                        not os.path.isfile(wilist_failed_path('redo', lis, pdbid)):
-                    _log.debug("add redo wilist job for %s" % pdbid)
-                    wilist_job = WilistJob('redo', lis, pdbid, self._pdbredo_fetch_job)
-                    self._queue.put(wilist_job)
-                    wilist_jobs[lis].append(wilist_job)
-
-                if lis in scene_types and not scene_uptodate('redo', lis, pdbid) and \
-                        pdbid not in scene_annotated[lis]:
-                    _log.debug("add redo scene job for %s" % pdbid)
-                    scene_job = SceneJob('redo', lis, pdbid, wilist_job)
-                    self._queue.put(scene_job)
-                    scene_jobs[lis].append(scene_job)
+            #for lis in lis_types:
+            #    wilist_job = None
+            #    if not wilist_uptodate('redo', lis, pdbid) and \
+            #            pdbid not in wilist_annotated[lis] and \
+            #            not os.path.isfile(wilist_failed_path('redo', lis, pdbid)):
+            #        _log.debug("add redo wilist job for %s" % pdbid)
+            #        wilist_job = WilistJob('redo', lis, pdbid, self._pdbredo_fetch_job)
+            #        self._queue.put(wilist_job)
+            #        wilist_jobs[lis].append(wilist_job)
+            #
+            #    if lis in scene_types and not scene_uptodate('redo', lis, pdbid) and \
+            #            pdbid not in scene_annotated[lis]:
+            #        _log.debug("add redo scene job for %s" % pdbid)
+            #        scene_job = SceneJob('redo', lis, pdbid, wilist_job)
+            #        self._queue.put(scene_job)
+            #        scene_jobs[lis].append(scene_job)
 
         self._queue.put(AlldataJob(self._pdbredo_fetch_job))
         self._queue.put(WhynotCrawlJob('DSSP_REDO',
                                        os.path.join(settings["DATADIR"],
                                                     'dssp_redo'),
                                        dsspredo_jobs), priority=10)
-        for lis in lis_types:
-            self._queue.put(WhynotCrawlJob('WHATIF_REDO_%s' % lis,
-                                           os.path.join(
-                                               settings["DATADIR"],
-                                               'wi-lists/redo/%s' % lis
-                                           ),
-                                           wilist_jobs[lis]), priority=10)
-        for lis in scene_types:
-            self._queue.put(WhynotCrawlJob(
-                                'REDO_SCENES_%s' % lis,
-                                os.path.join(
-                                    settings["DATADIR"],
-                                    'wi-lists/redo/scenes/%s' % lis
-                                ),
-                                scene_jobs[lis]), priority=10)
+        #for lis in lis_types:
+        #    self._queue.put(WhynotCrawlJob('WHATIF_REDO_%s' % lis,
+        #                                   os.path.join(
+        #                                       settings["DATADIR"],
+        #                                       'wi-lists/redo/%s' % lis
+        #                                   ),
+        #                                   wilist_jobs[lis]), priority=10)
+        #for lis in scene_types:
+        #    self._queue.put(WhynotCrawlJob(
+        #                        'REDO_SCENES_%s' % lis,
+        #                        os.path.join(
+        #                            settings["DATADIR"],
+        #                            'wi-lists/redo/scenes/%s' % lis
+        #                        ),
+        #                        scene_jobs[lis]), priority=10)
 
 
