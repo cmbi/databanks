@@ -63,6 +63,29 @@ def hg_hssp_path(seq_id):
     return os.path.join(settings["DATADIR"],
                         'hg-hssp/%s.sto.bz2' % seq_id)
 
+def run_mkhssp(in_path, out_path, log_tag, err_path=None):
+    cmd = [MKHSSP, '-i', in_path, '-o', out_path,
+           '-a', '1', '-m', '2500', '--fetch-dbrefs',
+           '-d', os.path.join(settings["DATADIR"], 'fasta/uniprot_sprot.fasta'),
+           '-d', os.path.join(settings["DATADIR"], 'fasta/uniprot_trembl.fasta')]
+
+    if err_path is None:
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        while p.poll() is None:
+            _log.debug("[%s] %s" % (log_tag, p.stdout.readline().decode("ascii")))
+            _log.error("[%s] %s" % (log_tag, p.stderr.readline().decode("ascii")))
+    else:
+        with open(err_path, 'wb') as err_file:
+            p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err_file)
+
+            while p.poll() is None:
+                _log.debug("[%s] %s" % (log_tag, p.stdout.readline().decode("ascii")))
+
+    if p.returncode != 0:
+        raise RuntimeError("mkhssp ended with status {}".format(p.returncode))
+
+
 class HgHsspJob(Job):
     def __init__(self, seq_id):
         Job.__init__(self, "hghssp_%s" % seq_id, [])
@@ -72,29 +95,7 @@ class HgHsspJob(Job):
         in_path = hg_fasta_path(self._seq_id)
         out_path = hg_hssp_path(self._seq_id)
 
-        cmd = [MKHSSP, '-i', in_path, '-o', out_path,
-               '-a', '1', '-m', '2500', '--fetch-dbrefs',
-               '-d', os.path.join(settings["DATADIR"],
-                                  'fasta/uniprot_sprot.fasta'),
-               '-d', os.path.join(settings["DATADIR"],
-                                  'fasta/uniprot_trembl.fasta')]
-
-        if os.path.isfile(in_path):
-            _log.debug("[hghssp] %s" % ' '.join(cmd))
-
-            p = None
-            while p is None:
-                try:
-                    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    stdout, stderr = p.communicate()
-                except OSError:
-                    continue
-
-            for line in stdout.decode('ascii').split('\n'):
-                _log.debug("[hghssp] %s" % out_line.strip())
-
-            for line in stderr.decode('ascii').split('\n'):
-                _log.error("[hghssp] %s" % out_line.strip())
+        run_mkhssp(in_path, out_path, "hghssp")
 
 
 class HsspJob(Job):
@@ -111,29 +112,8 @@ class HsspJob(Job):
         out1_path = hssp1_path(self._pdbid)
         err_path = "/srv/data/scratch/whynot2/hssp/%s.err" % self._pdbid
 
-        cmd = [MKHSSP, '-i', in_path, '-o', out3_path,
-               '-a', '1', '-m', '2500', '--fetch-dbrefs',
-               '-d', os.path.join(settings["DATADIR"],
-                                  'fasta/uniprot_sprot.fasta'),
-               '-d', os.path.join(settings["DATADIR"],
-                                  'fasta/uniprot_trembl.fasta')]
-
         if os.path.isfile(in_path):
-            _log.debug("[hssp] %s" % ' '.join(cmd))
-
-            p = None
-            while p is None:
-                try:
-                    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    stdout, stderr = p.communicate()
-                except OSError:
-                    continue
-
-            with open(err_path, 'wb') as f:
-                f.write(stderr)
-
-            for line in stdout.decode('ascii').split('\n'):
-                _log.info("[hssp] %s" % line)
+            run_mkhssp(in_path, out3_path, "hssp", err_path)
 
         if os.path.isfile(out3_path):
             log_command(_log, 'hssp',

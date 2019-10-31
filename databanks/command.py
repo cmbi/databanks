@@ -44,24 +44,24 @@ def log_command(log, tag, cmdstr,
     log.info("[%s] %s" % (tag, cmdstr))
     p = None
     while p is None:
-        try:
-            if strin is not None:
-                input_= strin.encode('ascii')
-            else:
-                input_ = None
+        t0 = time()
+        p = Popen(cmdstr, shell=True, cwd=cwd, stdout=PIPE, stderr=PIPE, stdin=PIPE)
 
-            p = Popen(cmdstr, shell=True, cwd=cwd, stdout=PIPE, stderr=PIPE)
+        if strin is not None:
+            input_= strin.encode('ascii')
+            p.stdin.write(input_)
+            p.stdin.close()
 
-            stderr, stdout = p.communicate(input=strin, timeout=timeout)
-        except OSError:
-            continue
-        except TimeoutExpired:
-            return False
+        while p.poll() is None:
+            if timeout is not None and (time() - t0) < timeout:
+                break
+            log.debug("[%s] %s" % (tag, p.stdout.readline().decode('ascii')))
+            log.error("[%s] %s" % (tag, p.stderr.readline().decode('ascii')))
 
-    for line in stdout.decode('utf-8').split('\n'):
-        log.debug("[%s] %s" % (tag, line))
+    if p.returncode is None:
+        return False
 
-    for line in stderr.decode('utf-8').split('\n'):
-        log.error("[%s] %s" % (tag, line))
+    if p.returncode != 0:
+        raise RuntimeError("{} ended with exit code {}".format(cmdstr, p.returncode))
 
     return True
