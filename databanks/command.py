@@ -57,10 +57,10 @@ def log_command(log, tag, cmdstr,
                 break
 
             for line in p.stdout:
-                log.debug("[%s] %s" % (tag, line.decode('ascii')))
+                log.debug("[%s] %s" % (tag, line.decode()))
 
             for line in p.stderr:
-                log.error("[%s] %s" % (tag, p.stderr.readline().decode('ascii')))
+                log.error("[%s] %s" % (tag, p.stderr.readline().decode()))
 
     if p.returncode is None:
         return False
