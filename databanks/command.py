@@ -4,7 +4,7 @@ import psutil
 from threading import Thread
 from time import time, sleep
 
-from subprocess import Popen, PIPE, TimeoutExpired
+from subprocess import Popen, PIPE
 import logging
 
 _log = logging.getLogger(__name__)
@@ -53,10 +53,14 @@ def log_command(log, tag, cmdstr,
             p.stdin.close()
 
         while p.poll() is None:
-            if timeout is not None and (time() - t0) < timeout:
+            if timeout is not None and (time() - t0) >= timeout:
                 break
-            log.debug("[%s] %s" % (tag, p.stdout.readline().decode('ascii')))
-            log.error("[%s] %s" % (tag, p.stderr.readline().decode('ascii')))
+
+            for line in p.stdout:
+                log.debug("[%s] %s" % (tag, line.decode('ascii')))
+
+            for line in p.stderr:
+                log.error("[%s] %s" % (tag, p.stderr.readline().decode('ascii')))
 
     if p.returncode is None:
         return False
