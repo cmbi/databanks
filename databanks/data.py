@@ -157,7 +157,7 @@ class ScheduleSceneDataJob(Job):
     def run(self):
         for lis in scene_types:
             self._queue.put(SceneCleanupJob(self._pdb_fetch_job, 'pdb', lis))
-            self._queue.put(SceneCleanupJob(self._pdbredo_fetch_job, 'redo', lis))
+            self._queue.put(SceneCleanupJob(self._redo_fetch_job, 'redo', lis))
 
         for src in ['pdb', 'redo']:
             for lis in scene_types:
@@ -185,7 +185,7 @@ class SchedulePdbDataJob(Job):
         _log.debug("scheduling pdb-based data jobs")
 
         dssp_annotated = annotated_set('DSSP')
-        pdbreport_annotated = annotated_set('PDBREPORT')
+        #pdbreport_annotated = annotated_set('PDBREPORT')
         bdb_annotated = annotated_set('BDB')
         #wilist_annotated = {lis: annotated_set('WHATIF_PDB_%s' % lis)
         #                    for lis in lis_types}
@@ -193,9 +193,9 @@ class SchedulePdbDataJob(Job):
         #                   for lis in scene_types}
 
         pdbreport_jobs = []
-        pdbreport_clean_job = PdbreportCleanupJob(self._pdb_fetch_job)
-        self._queue.put(pdbreport_clean_job, priority=10)
-        pdbreport_jobs.append(pdbreport_clean_job)
+        #pdbreport_clean_job = PdbreportCleanupJob(self._pdb_fetch_job)
+        #self._queue.put(pdbreport_clean_job, priority=10)
+        #pdbreport_jobs.append(pdbreport_clean_job)
 
         #wilist_jobs = {}
         #for lis in lis_types:
@@ -244,11 +244,11 @@ class SchedulePdbDataJob(Job):
                 self._queue.put(bdb_job)
                 bdb_jobs.append(bdb_job)
 
-            if not pdbreport_uptodate(pdbid) and pdbid not in pdbreport_annotated:
-                _log.debug("add pdbreport job for %s" % pdbid)
-                pdbreport_job = PdbreportJob(pdbid, pdb_extract_job)
-                self._queue.put(pdbreport_job, priority=1)
-                pdbreport_jobs.append(pdbreport_job)
+            #if not pdbreport_uptodate(pdbid) and pdbid not in pdbreport_annotated:
+            #    _log.debug("add pdbreport job for %s" % pdbid)
+            #    pdbreport_job = PdbreportJob(pdbid, pdb_extract_job)
+            #    self._queue.put(pdbreport_job, priority=1)
+            #    pdbreport_jobs.append(pdbreport_job)
 
             #for lis in lis_types:
             #    wilist_job = None
