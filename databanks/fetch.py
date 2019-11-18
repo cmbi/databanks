@@ -174,7 +174,7 @@ class FetchUniprotJob(Job):
                          'uniprot_sprot.dat.gz', 'uniprot_trembl.dat.gz',
                          'README', 'reldate.txt']:
             log_command(_log, 'uniprot',
-                '/usr/bin/wget' +
+                '/usr/bin/wget -q' +
                 ' ftp://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/complete/%s' % filename +
                 ' -N -P %s' % uniprot_dir,
                 timeout=24*60*60
