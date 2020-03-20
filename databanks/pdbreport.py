@@ -15,9 +15,9 @@ import logging
 _log = logging.getLogger(__name__)
 
 #whatif = "/srv/data/prog/wi-lists/whatif/src/whatif"
-whatcheck = "/srv/data/zata/whatcheck14/bin/whatcheck"
-htmlgen = "/srv/data/zata/whatcheck14/dbdata/pdbout2html"
-ccp4setup = "/srv/data/zata/ccp4-7.0/bin/ccp4.setup-sh"
+whatcheck = "/srv/home/vriend/wif/bin/whatcheck"
+htmlgen = "/srv/home/vriend/wif/bin/pdbout2html"
+ccp4setup = "/srv/home/vriend/ccp4/ccp4-7.0/bin/ccp4.setup-sh"
 
 def pdbreport_path(pdbid):
     return os.path.join(settings["DATADIR"], "pdbreport",
