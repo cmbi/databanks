@@ -45,7 +45,7 @@ class Pdbfinder2DatJob(Job):
         _log.info("[pdbfinder2] mkpdbfinder2 %s" % self._pdbid)
 
         log_command(_log, 'pdbfinder2',
-            PDBFINDER2_SCRIPT + " -pdbftopdbf2" +
+            "python2 " + PDBFINDER2_SCRIPT + " -pdbftopdbf2" +
             " %s" % (self._pdbid.lower()),
             cwd="/srv/data/prog/pdbfinder2/"
         )
