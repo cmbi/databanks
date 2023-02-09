@@ -22,6 +22,9 @@
 # Please note: The database version number is not a unique identification for
 #              the database, only for this script.
 #
+# v10.1: Sep 12, 2013 CB
+#       No longer treat electron microscopy as OTHER.
+#
 # v10.0:Apr 12, 2018 EK
 #       Modified the 'mmcif_first_revdate' subroutine.
 #       This fixes the problem that mmCIF files like 4V8S have date "?" in PDBFIND.TXT.
@@ -996,6 +999,8 @@ sub extract_method {
 	$METHOD='NMR';
     } elsif ($METHOD =~/X-RAY/) {
 	$METHOD='X';
+    } elsif ($METHOD =~/ELECTRON MICROSCOPY/) {
+	$METHOD='EM';
     } elsif ($METHOD =~/SYNCHROTRON RADIATION/) {
 	$METHOD='X';
     } elsif ($METHOD =~/MODEL/) {
@@ -2704,7 +2709,7 @@ sub print_mmcif_expmethod
 	} elsif ($method =~/FLUORESCENCE TRANSFER/) {
 		$method='OTHER';
 	} elsif ($method =~/ELECTRON MICROSCOPY/) {
-		$method='OTHER';
+		$method='EM';
 	} else {
 		warning "Unknown method $method for $PID\n";
 		$method='OTHER';
